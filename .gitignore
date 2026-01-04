@@ -1,0 +1,45 @@
+# Claude Code
+.claude/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+*.manifest
+*.spec.old
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Local development
+*.local.md
+
+# Temporary files
+*.tmp
+*.temp

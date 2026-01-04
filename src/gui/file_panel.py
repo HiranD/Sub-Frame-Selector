@@ -1,0 +1,315 @@
+"""File panel component with scrollable file list."""
+
+import customtkinter as ctk
+from typing import Callable, Optional
+from pathlib import Path
+
+
+class FilePanel(ctk.CTkFrame):
+    """Scrollable file list with selection checkboxes."""
+
+    def __init__(
+        self,
+        parent,
+        on_selection_change: Callable[[set[int]], None]
+    ):
+        """
+        Initialize file panel.
+
+        Args:
+            parent: Parent widget
+            on_selection_change: Callback when selection changes (receives set of selected indices)
+        """
+        super().__init__(parent)
+
+        self.on_selection_change = on_selection_change
+        self.files: list[dict] = []
+        self.file_widgets: list[dict] = []
+        self.selected_indices: set[int] = set()
+        self.metrics_data: list[dict] = []
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """Create panel UI."""
+        # Configure grid
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # Header
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+
+        self.folder_label = ctk.CTkLabel(
+            header_frame,
+            text="No folder selected",
+            font=ctk.CTkFont(size=12),
+            anchor="w"
+        )
+        self.folder_label.pack(fill="x")
+
+        self.count_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            anchor="w"
+        )
+        self.count_label.pack(fill="x")
+
+        # Scrollable frame for file list
+        self.scroll_frame = ctk.CTkScrollableFrame(self)
+        self.scroll_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.scroll_frame.grid_columnconfigure(0, weight=1)
+
+        # Footer with selection info
+        footer_frame = ctk.CTkFrame(self, fg_color="transparent")
+        footer_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+
+        self.selection_label = ctk.CTkLabel(
+            footer_frame,
+            text="Selected: 0",
+            font=ctk.CTkFont(size=11),
+            anchor="w"
+        )
+        self.selection_label.pack(side="left")
+
+        # Select/Deselect all buttons
+        self.deselect_btn = ctk.CTkButton(
+            footer_frame,
+            text="Clear",
+            width=60,
+            height=24,
+            font=ctk.CTkFont(size=11),
+            command=self._deselect_all
+        )
+        self.deselect_btn.pack(side="right", padx=2)
+
+    def load_files(self, files: list[dict]):
+        """
+        Populate list with file entries.
+
+        Args:
+            files: List of dicts with 'path' and 'filename' keys
+        """
+        # Clear existing
+        self._clear_list()
+
+        self.files = files
+        self.selected_indices = set()
+        self.metrics_data = []
+
+        # Update folder label
+        if files:
+            folder = Path(files[0]['path']).parent
+            self.folder_label.configure(text=f"{folder.name}/")
+            self.count_label.configure(text=f"{len(files)} files")
+
+        # Create file entries
+        for i, file_info in enumerate(files):
+            self._create_file_entry(i, file_info)
+
+        self._update_selection_label()
+
+    def _create_file_entry(self, index: int, file_info: dict):
+        """Create a single file entry widget."""
+        frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+        frame.grid(row=index, column=0, sticky="ew", pady=1)
+        frame.grid_columnconfigure(1, weight=1)
+
+        # Checkbox
+        var = ctk.BooleanVar(value=False)
+        checkbox = ctk.CTkCheckBox(
+            frame,
+            text="",
+            variable=var,
+            width=24,
+            command=lambda idx=index: self._on_checkbox_toggle(idx)
+        )
+        checkbox.grid(row=0, column=0, padx=(5, 2))
+
+        # Filename label
+        filename_label = ctk.CTkLabel(
+            frame,
+            text=file_info['filename'],
+            font=ctk.CTkFont(size=12),
+            anchor="w"
+        )
+        filename_label.grid(row=0, column=1, sticky="w", padx=2)
+
+        # Metrics label (initially empty)
+        metrics_label = ctk.CTkLabel(
+            frame,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            anchor="w"
+        )
+        metrics_label.grid(row=0, column=2, sticky="e", padx=5)
+
+        # Deletion marker (hidden by default)
+        delete_marker = ctk.CTkLabel(
+            frame,
+            text="X",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#dc3545",
+            width=20
+        )
+        # Don't grid yet - will show when selected
+
+        self.file_widgets.append({
+            'frame': frame,
+            'checkbox': checkbox,
+            'var': var,
+            'filename_label': filename_label,
+            'metrics_label': metrics_label,
+            'delete_marker': delete_marker
+        })
+
+    def _on_checkbox_toggle(self, index: int):
+        """Handle checkbox toggle."""
+        if index >= len(self.file_widgets):
+            return
+
+        widget = self.file_widgets[index]
+        is_selected = widget['var'].get()
+
+        if is_selected:
+            self.selected_indices.add(index)
+            widget['delete_marker'].grid(row=0, column=3, padx=5)
+            widget['frame'].configure(fg_color=("gray85", "gray25"))
+        else:
+            self.selected_indices.discard(index)
+            widget['delete_marker'].grid_forget()
+            widget['frame'].configure(fg_color="transparent")
+
+        self._update_selection_label()
+        self.on_selection_change(self.selected_indices)
+
+    def _update_selection_label(self):
+        """Update selection count label."""
+        count = len(self.selected_indices)
+        self.selection_label.configure(text=f"Selected: {count}")
+
+    def _deselect_all(self):
+        """Deselect all files."""
+        for idx in list(self.selected_indices):
+            if idx < len(self.file_widgets):
+                widget = self.file_widgets[idx]
+                widget['var'].set(False)
+                widget['delete_marker'].grid_forget()
+                widget['frame'].configure(fg_color="transparent")
+
+        self.selected_indices.clear()
+        self._update_selection_label()
+        self.on_selection_change(self.selected_indices)
+
+    def _clear_list(self):
+        """Clear all file entries."""
+        for widget in self.file_widgets:
+            widget['frame'].destroy()
+        self.file_widgets = []
+        self.files = []
+        self.selected_indices = set()
+
+    def set_metrics(self, results: list[dict]):
+        """
+        Update file entries with metrics data.
+
+        Args:
+            results: List of analysis results with 'metrics' dict
+        """
+        self.metrics_data = results
+
+        for i, result in enumerate(results):
+            if i >= len(self.file_widgets):
+                break
+
+            widget = self.file_widgets[i]
+            metrics = result.get('metrics')
+
+            if metrics:
+                # Show abbreviated metrics
+                text = f"FWHM:{metrics['fwhm']:.1f} E:{metrics['eccentricity']:.2f}"
+                widget['metrics_label'].configure(text=text, text_color="gray")
+            else:
+                error = result.get('error', 'Error')
+                widget['metrics_label'].configure(text=error[:20], text_color="#dc3545")
+
+    def set_selected(self, indices: set[int]):
+        """
+        Set which files are selected (from external source like plot).
+
+        Args:
+            indices: Set of indices to select
+        """
+        # First deselect all
+        for idx, widget in enumerate(self.file_widgets):
+            if idx in self.selected_indices and idx not in indices:
+                widget['var'].set(False)
+                widget['delete_marker'].grid_forget()
+                widget['frame'].configure(fg_color="transparent")
+
+        # Then select new ones
+        for idx in indices:
+            if idx < len(self.file_widgets):
+                widget = self.file_widgets[idx]
+                if not widget['var'].get():
+                    widget['var'].set(True)
+                    widget['delete_marker'].grid(row=0, column=3, padx=5)
+                    widget['frame'].configure(fg_color=("gray85", "gray25"))
+
+        self.selected_indices = indices.copy()
+        self._update_selection_label()
+
+    def remove_files(self, indices: list[int]):
+        """
+        Remove files from list (after deletion).
+
+        Args:
+            indices: List of indices to remove (should be sorted descending)
+        """
+        # Remove in reverse order to maintain indices
+        for idx in sorted(indices, reverse=True):
+            if idx < len(self.file_widgets):
+                self.file_widgets[idx]['frame'].destroy()
+                del self.file_widgets[idx]
+                del self.files[idx]
+                if idx < len(self.metrics_data):
+                    del self.metrics_data[idx]
+
+        # Update selected indices
+        new_selected = set()
+        for old_idx in self.selected_indices:
+            # Count how many removed indices were below this one
+            shift = sum(1 for i in indices if i < old_idx)
+            new_idx = old_idx - shift
+            if new_idx >= 0 and old_idx not in indices:
+                new_selected.add(new_idx)
+
+        self.selected_indices = new_selected
+
+        # Renumber widgets
+        for i, widget in enumerate(self.file_widgets):
+            widget['frame'].grid(row=i, column=0, sticky="ew", pady=1)
+
+        # Update count
+        self.count_label.configure(text=f"{len(self.files)} files")
+        self._update_selection_label()
+        self.on_selection_change(self.selected_indices)
+
+    def get_selected_files(self) -> list[str]:
+        """Return list of selected file paths."""
+        return [
+            self.files[idx]['path']
+            for idx in self.selected_indices
+            if idx < len(self.files)
+        ]
+
+    def scroll_to_index(self, index: int):
+        """Scroll to show a specific file entry."""
+        if index < len(self.file_widgets):
+            # CustomTkinter scrollable frame doesn't have direct scroll_to
+            # This is a workaround
+            widget = self.file_widgets[index]['frame']
+            widget.focus_set()
