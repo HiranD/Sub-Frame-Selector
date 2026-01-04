@@ -88,9 +88,9 @@ class SubframeAnalyzer:
         self.threshold_sigma = threshold_sigma
         self.max_stars = max_stars
 
-        # Default to 80% of available cores
+        # Default to max cores - 2
         if num_workers is None:
-            num_workers = max(1, int(cpu_count() * 0.8))
+            num_workers = max(1, cpu_count() - 2)
         self.num_workers = max(1, min(cpu_count(), num_workers))
 
         self.fits_reader = FITSReader()
@@ -157,24 +157,23 @@ class SubframeAnalyzer:
             'star_count_fitted': len(psf_results)
         }
 
-    def analyze_folder(
+    def analyze_files(
         self,
-        folder_path: str,
+        files: list[dict],
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         use_parallel: bool = True
     ) -> dict:
         """
-        Analyze all FITS files in a folder.
+        Analyze a list of FITS files (can be from multiple folders).
 
         Args:
-            folder_path: Path to folder containing FITS files
+            files: List of file dicts with 'path' and 'filename' keys
             progress_callback: Optional callback(current, total, filename)
             use_parallel: Use parallel processing (default True)
 
         Returns:
             Dict with results and statistics:
             {
-                'folder': str,
                 'total_files': int,
                 'results': [
                     {'filepath': ..., 'filename': ..., 'metrics': {...}},
@@ -189,13 +188,10 @@ class SubframeAnalyzer:
                 'imaging_params': dict or None
             }
         """
-        # Get file list
-        files = self.fits_reader.load_folder(folder_path)
         total = len(files)
 
         if total == 0:
             return {
-                'folder': folder_path,
                 'total_files': 0,
                 'results': [],
                 'statistics': {},
@@ -220,13 +216,38 @@ class SubframeAnalyzer:
         statistics = calculate_all_metric_stats(valid_metrics)
 
         return {
-            'folder': folder_path,
             'total_files': total,
             'results': results,
             'statistics': statistics,
             'workers_used': workers,
             'imaging_params': imaging_params
         }
+
+    def analyze_folder(
+        self,
+        folder_path: str,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        use_parallel: bool = True
+    ) -> dict:
+        """
+        Analyze all FITS files in a folder.
+
+        Args:
+            folder_path: Path to folder containing FITS files
+            progress_callback: Optional callback(current, total, filename)
+            use_parallel: Use parallel processing (default True)
+
+        Returns:
+            Dict with results and statistics (same as analyze_files, plus 'folder' key)
+        """
+        # Get file list
+        files = self.fits_reader.load_folder(folder_path)
+
+        # Use analyze_files for the actual work
+        result = self.analyze_files(files, progress_callback, use_parallel)
+        result['folder'] = folder_path
+
+        return result
 
     def _analyze_sequential(
         self,

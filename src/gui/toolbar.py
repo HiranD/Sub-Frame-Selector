@@ -22,7 +22,8 @@ class Toolbar(ctk.CTkFrame):
         Args:
             parent: Parent widget
             callbacks: Dict of callback functions:
-                - 'open_folder': Called when Open Folder clicked
+                - 'open_folder': Called when Open Folder clicked (replaces files)
+                - 'add_folder': Called when Add Folder clicked (appends files)
                 - 'analyze': Called when Analyze clicked
                 - 'delete_selected': Called when Delete Selected clicked
                 - 'metric_changed': Called when metric dropdown changes (receives metric name)
@@ -32,20 +33,31 @@ class Toolbar(ctk.CTkFrame):
         self.callbacks = callbacks
         self._delete_count = 0
         self._total_cores = cpu_count()
-        self._num_cores = max(1, int(self._total_cores * 0.8))  # Default: 80% of cores
+        self._num_cores = max(1, self._total_cores - 2)  # Default: max cores - 2
 
         self._setup_ui()
 
     def _setup_ui(self):
         """Create toolbar UI elements."""
-        # Open Folder button
+        # Open Folder button (replaces existing files)
         self.open_btn = ctk.CTkButton(
             self,
             text="Open Folder",
             command=self.callbacks.get('open_folder', lambda: None),
-            width=120
+            width=110
         )
-        self.open_btn.pack(side="left", padx=(5, 10))
+        self.open_btn.pack(side="left", padx=(5, 2))
+
+        # Add Folder button (appends to existing files)
+        self.add_btn = ctk.CTkButton(
+            self,
+            text="+ Add Folder",
+            command=self.callbacks.get('add_folder', lambda: None),
+            width=100,
+            fg_color="#6c757d",
+            hover_color="#5a6268"
+        )
+        self.add_btn.pack(side="left", padx=(2, 10))
 
         # Analyze button
         self.analyze_btn = ctk.CTkButton(
@@ -178,10 +190,12 @@ class Toolbar(ctk.CTkFrame):
         if is_analyzing:
             self.analyze_btn.configure(state="disabled")
             self.open_btn.configure(state="disabled")
+            self.add_btn.configure(state="disabled")
             self.progress_label.pack(side="left", padx=10)
         else:
             self.analyze_btn.configure(state="normal")
             self.open_btn.configure(state="normal")
+            self.add_btn.configure(state="normal")
             self.progress_label.pack_forget()
 
     def get_selected_metric(self) -> str:

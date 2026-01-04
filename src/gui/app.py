@@ -36,7 +36,7 @@ class SubframeSelectorApp(ctk.CTk):
         self.config = self._load_config()
 
         # State
-        self.current_folder: Optional[str] = None
+        self.loaded_folders: set[str] = set()  # Track all loaded folders
         self.analysis_results: list[dict] = []
         self.analysis_statistics: dict = {}
         self.imaging_params: Optional[dict] = None
@@ -75,6 +75,7 @@ class SubframeSelectorApp(ctk.CTk):
             self,
             callbacks={
                 'open_folder': self.on_open_folder,
+                'add_folder': self.on_add_folder,
                 'analyze': self.on_analyze,
                 'delete_selected': self.on_delete_selected,
                 'metric_changed': self.on_metric_changed
@@ -139,7 +140,7 @@ class SubframeSelectorApp(ctk.CTk):
             pass  # Silently ignore config save errors
 
     def on_open_folder(self):
-        """Handle folder selection."""
+        """Handle folder selection (replaces existing files)."""
         # Use last folder if available, otherwise default
         initial_dir = self.config.get('last_folder')
         if initial_dir and not os.path.isdir(initial_dir):
@@ -151,14 +152,44 @@ class SubframeSelectorApp(ctk.CTk):
         )
 
         if folder:
-            self.current_folder = folder
             # Save last folder location
             self.config['last_folder'] = folder
             self._save_config()
-            self._load_files(folder)
+            self._load_files(folder, append=False)
 
-    def _load_files(self, folder: str):
-        """Load FITS files from folder."""
+    def on_add_folder(self):
+        """Handle adding folder (appends to existing files)."""
+        # Use last folder if available, otherwise default
+        initial_dir = self.config.get('last_folder')
+        if initial_dir and not os.path.isdir(initial_dir):
+            initial_dir = None
+
+        folder = filedialog.askdirectory(
+            title="Add folder containing FITS files",
+            initialdir=initial_dir
+        )
+
+        if folder:
+            # Check if folder already loaded
+            if folder in self.loaded_folders:
+                messagebox.showinfo(
+                    "Already Loaded",
+                    f"Files from this folder are already loaded:\n{folder}"
+                )
+                return
+
+            # Save last folder location
+            self.config['last_folder'] = folder
+            self._save_config()
+            self._load_files(folder, append=True)
+
+    def _load_files(self, folder: str, append: bool = False):
+        """Load FITS files from folder.
+
+        Args:
+            folder: Path to folder containing FITS files
+            append: If True, append to existing files. If False, replace all.
+        """
         from analysis import FITSReader
 
         try:
@@ -172,20 +203,39 @@ class SubframeSelectorApp(ctk.CTk):
                 )
                 return
 
-            # Update file panel
-            self.file_panel.load_files(files)
+            if append:
+                # Append files to existing list
+                self.file_panel.add_files(files)
+                self.loaded_folders.add(folder)
 
-            # Clear previous state
-            self.analysis_results = []
-            self.analysis_statistics = {}
-            self.selected_for_deletion = set()
-            self.toolbar.set_delete_count(0)
+                # Clear analysis (needs re-analysis with new files)
+                self.analysis_results = []
+                self.analysis_statistics = {}
+                self.plot_panel.clear_plot()
 
-            # Clear plot
-            self.plot_panel.clear_plot()
+                # Update status
+                total_files = len(self.file_panel.files)
+                folder_count = len(self.loaded_folders)
+                self.status_label.configure(
+                    text=f"Loaded {total_files} files from {folder_count} folder(s)"
+                )
+            else:
+                # Replace all files
+                self.file_panel.load_files(files)
+                self.loaded_folders = {folder}
 
-            # Update status
-            self.status_label.configure(text=f"Loaded {len(files)} files from: {folder}")
+                # Clear previous state
+                self.analysis_results = []
+                self.analysis_statistics = {}
+                self.selected_for_deletion = set()
+                self.toolbar.set_delete_count(0)
+
+                # Clear plot
+                self.plot_panel.clear_plot()
+
+                # Update status
+                self.status_label.configure(text=f"Loaded {len(files)} files from: {folder}")
+
             self.stats_label.configure(text="Click 'Analyze' to calculate metrics")
 
         except Exception as e:
@@ -227,8 +277,9 @@ class SubframeSelectorApp(ctk.CTk):
                 # Update UI from main thread
                 self.after(0, lambda: self._update_progress(current, total, filename))
 
-            results = analyzer.analyze_folder(
-                self.current_folder,
+            # Analyze files from potentially multiple folders
+            results = analyzer.analyze_files(
+                self.file_panel.files,
                 progress_callback=progress_callback
             )
 

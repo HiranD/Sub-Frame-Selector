@@ -27,6 +27,7 @@ class FilePanel(ctk.CTkFrame):
         self.file_widgets: list[dict] = []
         self.selected_indices: set[int] = set()
         self.metrics_data: list[dict] = []
+        self.loaded_folders: set[str] = set()  # Track unique folders
 
         self._setup_ui()
 
@@ -87,10 +88,10 @@ class FilePanel(ctk.CTkFrame):
 
     def load_files(self, files: list[dict]):
         """
-        Populate list with file entries.
+        Populate list with file entries (replaces existing).
 
         Args:
-            files: List of dicts with 'path' and 'filename' keys
+            files: List of dicts with 'path', 'filename', 'folder', 'folder_name' keys
         """
         # Clear existing
         self._clear_list()
@@ -99,17 +100,61 @@ class FilePanel(ctk.CTkFrame):
         self.selected_indices = set()
         self.metrics_data = []
 
-        # Update folder label
-        if files:
-            folder = Path(files[0]['path']).parent
-            self.folder_label.configure(text=f"{folder.name}/")
-            self.count_label.configure(text=f"{len(files)} files")
+        # Track loaded folders
+        self.loaded_folders = {f.get('folder', str(Path(f['path']).parent)) for f in files}
+
+        # Update header
+        self._update_header()
 
         # Create file entries
         for i, file_info in enumerate(files):
             self._create_file_entry(i, file_info)
 
         self._update_selection_label()
+
+    def add_files(self, files: list[dict]):
+        """
+        Append files to existing list.
+
+        Args:
+            files: List of dicts with 'path', 'filename', 'folder', 'folder_name' keys
+        """
+        if not files:
+            return
+
+        # Track new folders
+        for f in files:
+            folder = f.get('folder', str(Path(f['path']).parent))
+            self.loaded_folders.add(folder)
+
+        # Append to files list
+        start_index = len(self.files)
+        self.files.extend(files)
+
+        # Update header
+        self._update_header()
+
+        # Create new file entries
+        for i, file_info in enumerate(files):
+            self._create_file_entry(start_index + i, file_info)
+
+        self._update_selection_label()
+
+    def _update_header(self):
+        """Update header labels based on loaded folders."""
+        if not self.files:
+            self.folder_label.configure(text="No folder selected")
+            self.count_label.configure(text="")
+            return
+
+        folder_count = len(self.loaded_folders)
+        if folder_count == 1:
+            folder_name = self.files[0].get('folder_name', Path(self.files[0]['path']).parent.name)
+            self.folder_label.configure(text=f"{folder_name}/")
+        else:
+            self.folder_label.configure(text=f"{folder_count} folders")
+
+        self.count_label.configure(text=f"{len(self.files)} files")
 
     def _create_file_entry(self, index: int, file_info: dict):
         """Create a single file entry widget."""
@@ -128,10 +173,17 @@ class FilePanel(ctk.CTkFrame):
         )
         checkbox.grid(row=0, column=0, padx=(5, 2))
 
+        # Display name: show folder/filename when multiple folders loaded
+        if len(self.loaded_folders) > 1:
+            folder_name = file_info.get('folder_name', Path(file_info['path']).parent.name)
+            display_name = f"{folder_name}/{file_info['filename']}"
+        else:
+            display_name = file_info['filename']
+
         # Filename label
         filename_label = ctk.CTkLabel(
             frame,
-            text=file_info['filename'],
+            text=display_name,
             font=ctk.CTkFont(size=12),
             anchor="w"
         )
@@ -211,6 +263,7 @@ class FilePanel(ctk.CTkFrame):
         self.file_widgets = []
         self.files = []
         self.selected_indices = set()
+        self.loaded_folders = set()
 
     def set_metrics(self, results: list[dict]):
         """

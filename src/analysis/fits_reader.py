@@ -67,7 +67,9 @@ class FITSReader:
             if filepath.suffix.lower() in self.SUPPORTED_EXTENSIONS:
                 files.append({
                     'path': str(filepath),
-                    'filename': filepath.name
+                    'filename': filepath.name,
+                    'folder': str(folder),
+                    'folder_name': folder.name
                 })
 
         # Sort by filename
