@@ -4,6 +4,9 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from typing import Optional, Callable
 import threading
+import json
+import os
+from pathlib import Path
 
 from .toolbar import Toolbar
 from .file_panel import FilePanel
@@ -12,6 +15,10 @@ from .plot_panel import PlotPanel
 
 class SubframeSelectorApp(ctk.CTk):
     """Main application window using CustomTkinter."""
+
+    # Config file location
+    CONFIG_DIR = Path.home() / ".subframe-selector"
+    CONFIG_FILE = CONFIG_DIR / "config.json"
 
     def __init__(self):
         super().__init__()
@@ -24,6 +31,9 @@ class SubframeSelectorApp(ctk.CTk):
         # Set appearance
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
+
+        # Load saved config
+        self.config = self._load_config()
 
         # State
         self.current_folder: Optional[str] = None
@@ -109,14 +119,42 @@ class SubframeSelectorApp(ctk.CTk):
         self.bind("<Control-o>", lambda e: self.on_open_folder())
         self.bind("<Command-o>", lambda e: self.on_open_folder())  # macOS
 
+    def _load_config(self) -> dict:
+        """Load saved configuration from disk."""
+        try:
+            if self.CONFIG_FILE.exists():
+                with open(self.CONFIG_FILE, 'r') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_config(self):
+        """Save configuration to disk."""
+        try:
+            self.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            with open(self.CONFIG_FILE, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception:
+            pass  # Silently ignore config save errors
+
     def on_open_folder(self):
         """Handle folder selection."""
+        # Use last folder if available, otherwise default
+        initial_dir = self.config.get('last_folder')
+        if initial_dir and not os.path.isdir(initial_dir):
+            initial_dir = None
+
         folder = filedialog.askdirectory(
-            title="Select folder containing FITS files"
+            title="Select folder containing FITS files",
+            initialdir=initial_dir
         )
 
         if folder:
             self.current_folder = folder
+            # Save last folder location
+            self.config['last_folder'] = folder
+            self._save_config()
             self._load_files(folder)
 
     def _load_files(self, folder: str):
