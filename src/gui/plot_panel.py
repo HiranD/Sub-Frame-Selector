@@ -337,7 +337,7 @@ class PlotPanel(ctk.CTkFrame):
                 self.canvas.draw_idle()
             return
 
-        index = self._find_nearest_point(event.xdata, event.ydata, tolerance=15)
+        index = self._find_nearest_point(event.xdata, event.ydata, tolerance=20)
 
         if index is not None and index != self.hover_index:
             # Remove old annotation
@@ -348,26 +348,87 @@ class PlotPanel(ctk.CTkFrame):
             filename = self.filenames[index] if index < len(self.filenames) else f"Frame {index}"
             value = self.values[index]
 
+            # Skip if value is NaN
+            if np.isnan(value):
+                return
+
             text = f"{filename}\n{self.current_metric}: {value:.3f}"
+
+            # Dynamically calculate tooltip position based on text length and available space
+            # Estimate tooltip width: ~7 pixels per character at fontsize 9, plus padding
+            char_width = 7
+            max_line_len = max(len(filename), len(f"{self.current_metric}: {value:.3f}"))
+            tooltip_width = max_line_len * char_width + 40  # extra padding for bbox
+
+            # Get point position in display (pixel) coordinates
+            point_display = self.ax.transData.transform([index, value])
+
+            # Get axes bbox in display coordinates
+            bbox = self.ax.get_window_extent()
+
+            # Calculate available space on each side
+            space_right = bbox.x1 - point_display[0]
+            space_left = point_display[0] - bbox.x0
+
+            # Dynamic offset: scale based on available space
+            # Use ~10% of available margin, clamped to reasonable range
+            min_offset = 12  # Minimum gap from point
+            max_offset = 30  # Maximum gap from point
+
+            # Position tooltip where there's enough space (prefer right side)
+            if space_right >= tooltip_width + 20:
+                # Right side: dynamic offset based on excess space
+                excess_space = space_right - tooltip_width
+                x_offset = min(max_offset, max(min_offset, excess_space * 0.15))
+                ha = 'left'
+            elif space_left >= tooltip_width + 20:
+                # Left side: dynamic offset based on excess space
+                excess_space = space_left - tooltip_width
+                x_offset = -min(max_offset, max(min_offset, excess_space * 0.15))
+                ha = 'right'
+            else:
+                # Tight space - use minimal offset on the side with more room
+                if space_right >= space_left:
+                    x_offset = min_offset
+                    ha = 'left'
+                else:
+                    x_offset = -min_offset
+                    ha = 'right'
+
+            # Y positioning based on normalized position
+            ylim = self.ax.get_ylim()
+            y_range = ylim[1] - ylim[0]
+            y_norm = (value - ylim[0]) / y_range if y_range > 0 else 0.5
+
+            if y_norm > 0.75:  # Top 25% - show below
+                y_offset = -30
+            elif y_norm < 0.20:  # Bottom 20% - show above
+                y_offset = 30
+            else:
+                y_offset = 15
 
             self.hover_annotation = self.ax.annotate(
                 text,
                 xy=(index, value),
-                xytext=(10, 10),
+                xytext=(x_offset, y_offset),
                 textcoords='offset points',
                 fontsize=9,
                 color='white',
+                ha=ha,
                 bbox=dict(
                     boxstyle='round,pad=0.5',
                     facecolor='#333333',
                     edgecolor='#555555',
-                    alpha=0.9
+                    alpha=0.95
                 ),
                 arrowprops=dict(
                     arrowstyle='->',
-                    connectionstyle='arc3,rad=0',
+                    connectionstyle='arc3,rad=0.2',
                     color='#555555'
-                )
+                ),
+                zorder=100,
+                clip_on=False,
+                annotation_clip=False
             )
             self.hover_index = index
             self.canvas.draw_idle()
@@ -382,7 +443,7 @@ class PlotPanel(ctk.CTkFrame):
         self,
         x: float,
         y: float,
-        tolerance: float = 10
+        tolerance: float = 20
     ) -> Optional[int]:
         """
         Find the nearest data point to click position.
@@ -404,9 +465,17 @@ class PlotPanel(ctk.CTkFrame):
         # Convert click to display coordinates
         click_display = ax_trans.transform([x, y])
 
-        # Find nearest point
+        # Find nearest point (excluding NaN values)
         indices = np.arange(len(self.values))
-        points_data = np.column_stack([indices, self.values])
+        valid_mask = ~np.isnan(self.values)
+
+        if not np.any(valid_mask):
+            return None
+
+        valid_indices = indices[valid_mask]
+        valid_values = self.values[valid_mask]
+
+        points_data = np.column_stack([valid_indices, valid_values])
         points_display = ax_trans.transform(points_data)
 
         distances = np.sqrt(
@@ -417,7 +486,7 @@ class PlotPanel(ctk.CTkFrame):
         min_idx = np.argmin(distances)
 
         if distances[min_idx] < tolerance:
-            return int(min_idx)
+            return int(valid_indices[min_idx])
 
         return None
 

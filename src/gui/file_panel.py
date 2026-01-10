@@ -1,8 +1,79 @@
 """File panel component with scrollable file list."""
 
 import customtkinter as ctk
+import tkinter as tk
 from typing import Callable, Optional
 from pathlib import Path
+
+
+class ToolTip:
+    """Simple tooltip for tkinter/CTk widgets."""
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        """
+        Create tooltip for widget.
+
+        Args:
+            widget: Widget to attach tooltip to
+            text: Tooltip text
+            delay: Delay in ms before showing tooltip
+        """
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tooltip_window = None
+        self.scheduled_id = None
+
+        widget.bind("<Enter>", self._schedule_show)
+        widget.bind("<Leave>", self._hide)
+        widget.bind("<Button-1>", self._hide)
+
+    def _schedule_show(self, event=None):
+        """Schedule tooltip to show after delay."""
+        self._hide()
+        self.scheduled_id = self.widget.after(self.delay, self._show)
+
+    def _show(self, event=None):
+        """Show the tooltip."""
+        if self.tooltip_window:
+            return
+
+        # Get widget position
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+
+        # Create tooltip window
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+
+        # Style the tooltip
+        label = tk.Label(
+            self.tooltip_window,
+            text=self.text,
+            background="#333333",
+            foreground="white",
+            relief="solid",
+            borderwidth=1,
+            font=("TkDefaultFont", 10),
+            padx=8,
+            pady=4
+        )
+        label.pack()
+
+    def _hide(self, event=None):
+        """Hide the tooltip."""
+        if self.scheduled_id:
+            self.widget.after_cancel(self.scheduled_id)
+            self.scheduled_id = None
+
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
+    def update_text(self, text: str):
+        """Update tooltip text."""
+        self.text = text
 
 
 class FilePanel(ctk.CTkFrame):
@@ -189,6 +260,9 @@ class FilePanel(ctk.CTkFrame):
         )
         filename_label.grid(row=0, column=1, sticky="w", padx=2)
 
+        # Add tooltip showing full path
+        filename_tooltip = ToolTip(filename_label, file_info['path'])
+
         # Metrics label (initially empty)
         metrics_label = ctk.CTkLabel(
             frame,
@@ -214,7 +288,9 @@ class FilePanel(ctk.CTkFrame):
             'checkbox': checkbox,
             'var': var,
             'filename_label': filename_label,
+            'filename_tooltip': filename_tooltip,
             'metrics_label': metrics_label,
+            'metrics_tooltip': None,  # Will be set when metrics available
             'delete_marker': delete_marker
         })
 
@@ -285,9 +361,35 @@ class FilePanel(ctk.CTkFrame):
                 # Show abbreviated metrics
                 text = f"FWHM:{metrics['fwhm']:.1f} E:{metrics['eccentricity']:.2f}"
                 widget['metrics_label'].configure(text=text, text_color="gray")
+
+                # Create detailed tooltip with all metrics
+                tooltip_lines = [
+                    f"FWHM: {metrics['fwhm']:.3f} px",
+                ]
+                if metrics.get('fwhm_arcsec'):
+                    tooltip_lines.append(f"FWHM: {metrics['fwhm_arcsec']:.2f} arcsec")
+                tooltip_lines.extend([
+                    f"Eccentricity: {metrics['eccentricity']:.3f}",
+                    f"SNR: {metrics['snr']:.1f}",
+                    f"Stars: {metrics['star_count']}",
+                    f"Background: {metrics['background']:.1f}"
+                ])
+                tooltip_text = "\n".join(tooltip_lines)
+
+                # Create or update tooltip
+                if widget['metrics_tooltip']:
+                    widget['metrics_tooltip'].update_text(tooltip_text)
+                else:
+                    widget['metrics_tooltip'] = ToolTip(widget['metrics_label'], tooltip_text)
             else:
                 error = result.get('error', 'Error')
                 widget['metrics_label'].configure(text=error[:20], text_color="#dc3545")
+
+                # Add error tooltip
+                if widget['metrics_tooltip']:
+                    widget['metrics_tooltip'].update_text(error)
+                else:
+                    widget['metrics_tooltip'] = ToolTip(widget['metrics_label'], error)
 
     def set_selected(self, indices: set[int]):
         """
