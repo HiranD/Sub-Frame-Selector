@@ -157,6 +157,10 @@ class PlotPanel(ctk.CTkFrame):
         self.ax.clear()
         self._style_axes()
 
+        # Reset hover state (annotation was removed by ax.clear())
+        self.hover_annotation = None
+        self.hover_index = None
+
         if len(self.values) == 0:
             self.canvas.draw()
             return

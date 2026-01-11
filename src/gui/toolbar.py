@@ -4,6 +4,8 @@ import customtkinter as ctk
 from typing import Callable, Optional
 from multiprocessing import cpu_count
 
+from .file_panel import ToolTip
+
 
 class Toolbar(ctk.CTkFrame):
     """Toolbar with buttons and metric dropdown."""
@@ -26,6 +28,7 @@ class Toolbar(ctk.CTkFrame):
                 - 'add_folder': Called when Add Folder clicked (appends files)
                 - 'analyze': Called when Analyze clicked
                 - 'delete_selected': Called when Delete Selected clicked
+                - 'refresh': Called when Refresh clicked (recalculates after deletion)
                 - 'metric_changed': Called when metric dropdown changes (receives metric name)
         """
         super().__init__(parent)
@@ -94,6 +97,18 @@ class Toolbar(ctk.CTkFrame):
         )
         self.delete_btn.pack(side="left", padx=5)
 
+        # Refresh button (recalculates stats after deletion)
+        self.refresh_btn = ctk.CTkButton(
+            self,
+            text="Refresh",
+            command=self.callbacks.get('refresh', lambda: None),
+            width=80,
+            fg_color="#6c757d",
+            hover_color="#5a6268",
+            state="disabled"
+        )
+        self.refresh_btn.pack(side="left", padx=5)
+
         # Separator
         separator2 = ctk.CTkFrame(self, width=2, height=30)
         separator2.pack(side="left", padx=15)
@@ -139,6 +154,19 @@ class Toolbar(ctk.CTkFrame):
             width=50
         )
         self.cpu_value_label.pack(side="left", padx=2)
+
+        # Add tooltips to all controls
+        self._setup_tooltips()
+
+    def _setup_tooltips(self):
+        """Add tooltips to toolbar controls."""
+        ToolTip(self.open_btn, "Open a folder with FITS files (replaces current files)")
+        ToolTip(self.add_btn, "Add another folder (appends to current files)")
+        ToolTip(self.analyze_btn, "Analyze loaded files for quality metrics")
+        ToolTip(self.delete_btn, "Move selected files to Recycle Bin")
+        ToolTip(self.refresh_btn, "Rescan folders and update plots with remaining files")
+        ToolTip(self.metric_dropdown, "Select quality metric to display")
+        ToolTip(self.cpu_slider, "Number of CPU cores for parallel processing")
 
     def _on_metric_changed(self, metric: str):
         """Handle metric dropdown change."""
@@ -191,12 +219,17 @@ class Toolbar(ctk.CTkFrame):
             self.analyze_btn.configure(state="disabled")
             self.open_btn.configure(state="disabled")
             self.add_btn.configure(state="disabled")
+            self.refresh_btn.configure(state="disabled")
             self.progress_label.pack(side="left", padx=10)
         else:
             self.analyze_btn.configure(state="normal")
             self.open_btn.configure(state="normal")
             self.add_btn.configure(state="normal")
             self.progress_label.pack_forget()
+
+    def set_refresh_enabled(self, enabled: bool):
+        """Enable or disable the refresh button."""
+        self.refresh_btn.configure(state="normal" if enabled else "disabled")
 
     def get_selected_metric(self) -> str:
         """Get currently selected metric name."""

@@ -156,6 +156,7 @@ class FilePanel(ctk.CTkFrame):
             command=self._deselect_all
         )
         self.deselect_btn.pack(side="right", padx=2)
+        ToolTip(self.deselect_btn, "Clear all selections")
 
     def load_files(self, files: list[dict]):
         """
@@ -220,12 +221,33 @@ class FilePanel(ctk.CTkFrame):
 
         folder_count = len(self.loaded_folders)
         if folder_count == 1:
-            folder_name = self.files[0].get('folder_name', Path(self.files[0]['path']).parent.name)
-            self.folder_label.configure(text=f"{folder_name}/")
+            # Show truncated path (from beginning) with tooltip for full path
+            folder_path = self.files[0].get('folder', str(Path(self.files[0]['path']).parent))
+            display_path = self._truncate_path(folder_path, max_chars=35)
+            self.folder_label.configure(text=display_path)
+            # Add tooltip with full path
+            if not hasattr(self, '_folder_tooltip') or self._folder_tooltip is None:
+                self._folder_tooltip = ToolTip(self.folder_label, folder_path)
+            else:
+                self._folder_tooltip.update_text(folder_path)
         else:
+            # Show paths of all folders
+            folder_paths = sorted(self.loaded_folders)
             self.folder_label.configure(text=f"{folder_count} folders")
+            # Add tooltip with all paths
+            if not hasattr(self, '_folder_tooltip') or self._folder_tooltip is None:
+                self._folder_tooltip = ToolTip(self.folder_label, "\n".join(folder_paths))
+            else:
+                self._folder_tooltip.update_text("\n".join(folder_paths))
 
         self.count_label.configure(text=f"{len(self.files)} files")
+
+    def _truncate_path(self, path: str, max_chars: int = 35) -> str:
+        """Truncate path from the beginning if too long."""
+        if len(path) <= max_chars:
+            return path
+        # Truncate from beginning, keep the end (most relevant part)
+        return "..." + path[-(max_chars - 3):]
 
     def _create_file_entry(self, index: int, file_info: dict):
         """Create a single file entry widget."""

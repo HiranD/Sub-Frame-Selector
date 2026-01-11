@@ -64,8 +64,8 @@ class SubframeSelectorApp(ctk.CTk):
         +------------------------------------------+
         """
         # Configure grid
-        self.grid_columnconfigure(0, weight=3)  # File panel - 30%
-        self.grid_columnconfigure(1, weight=7)  # Plot panel - 70%
+        self.grid_columnconfigure(0, weight=2)  # File panel - 20%
+        self.grid_columnconfigure(1, weight=8)  # Plot panel - 80%
         self.grid_rowconfigure(0, weight=0)     # Toolbar - fixed
         self.grid_rowconfigure(1, weight=1)     # Main content - expand
         self.grid_rowconfigure(2, weight=0)     # Status bar - fixed
@@ -78,6 +78,7 @@ class SubframeSelectorApp(ctk.CTk):
                 'add_folder': self.on_add_folder,
                 'analyze': self.on_analyze,
                 'delete_selected': self.on_delete_selected,
+                'refresh': self.on_refresh,
                 'metric_changed': self.on_metric_changed
             }
         )
@@ -212,6 +213,7 @@ class SubframeSelectorApp(ctk.CTk):
                 self.analysis_results = []
                 self.analysis_statistics = {}
                 self.plot_panel.clear_plot()
+                self.toolbar.set_refresh_enabled(False)
 
                 # Update status
                 total_files = len(self.file_panel.files)
@@ -229,6 +231,7 @@ class SubframeSelectorApp(ctk.CTk):
                 self.analysis_statistics = {}
                 self.selected_for_deletion = set()
                 self.toolbar.set_delete_count(0)
+                self.toolbar.set_refresh_enabled(False)
 
                 # Clear plot
                 self.plot_panel.clear_plot()
@@ -298,6 +301,7 @@ class SubframeSelectorApp(ctk.CTk):
         """Handle analysis completion."""
         self.is_analyzing = False
         self.toolbar.set_analyzing(False)
+        self.toolbar.set_refresh_enabled(True)
 
         self.analysis_results = results['results']
         self.analysis_statistics = results.get('statistics', {})
@@ -387,6 +391,69 @@ class SubframeSelectorApp(ctk.CTk):
                 "Deletion Errors",
                 f"Some files could not be deleted:\n\n" + "\n".join(errors[:5])
             )
+
+    def on_refresh(self):
+        """Refresh by rescanning folders and using cached analysis data."""
+        from analysis import FITSReader, calculate_all_metric_stats
+
+        if not self.loaded_folders or not self.analysis_results:
+            return
+
+        # Rescan all loaded folders for existing files
+        reader = FITSReader()
+        current_files = []
+        for folder in self.loaded_folders:
+            files = reader.load_folder(folder)
+            current_files.extend(files)
+
+        # Get paths of files that still exist
+        current_paths = {f['path'] for f in current_files}
+
+        # Filter analysis results to only files that still exist
+        self.analysis_results = [
+            r for r in self.analysis_results
+            if r['filepath'] in current_paths
+        ]
+
+        # Build new file list matching analysis results order
+        result_paths = {r['filepath'] for r in self.analysis_results}
+        remaining_files = [f for f in current_files if f['path'] in result_paths]
+
+        # Update file panel
+        self.file_panel.load_files(remaining_files)
+        self.file_panel.set_metrics(self.analysis_results)
+
+        # Recalculate statistics
+        valid_metrics = [r['metrics'] for r in self.analysis_results if r.get('metrics')]
+        if valid_metrics:
+            self.analysis_statistics = calculate_all_metric_stats(valid_metrics)
+
+        # Clear selection and update UI
+        self.selected_for_deletion.clear()
+        self.toolbar.set_delete_count(0)
+        self._update_plot()
+        self._update_status_bar()
+
+    def _update_status_bar(self):
+        """Update status bar with current statistics."""
+        if not self.analysis_statistics:
+            return
+
+        has_arcsec = 'fwhm_arcsec' in self.analysis_statistics
+        stats = self.analysis_statistics
+
+        if has_arcsec and 'fwhm_arcsec' in stats:
+            self.stats_label.configure(
+                text=f"FWHM: {stats['fwhm_arcsec']['median']:.2f}\" (σ={stats['fwhm_arcsec']['sigma']:.2f}\")"
+            )
+        elif 'fwhm' in stats:
+            self.stats_label.configure(
+                text=f"FWHM: {stats['fwhm']['median']:.2f}px (σ={stats['fwhm']['sigma']:.2f}px)"
+            )
+
+        # Update main status
+        valid_count = len([r for r in self.analysis_results if r.get('metrics')])
+        self.status_label.configure(text=f"Refreshed. {valid_count} files remaining.")
 
     def on_metric_changed(self, metric: str):
         """Handle metric selection change in dropdown."""
