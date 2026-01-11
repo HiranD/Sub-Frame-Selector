@@ -1,52 +1,101 @@
 # SubFrame Selector
 
-A Python GUI tool for astrophotographers to analyze and select subframes based on quality metrics.
+A desktop application for astrophotographers to analyze and reject bad subframes based on quality metrics. Inspired by PixInsight's SubframeSelector.
+
+## Download
+
+**No installation required!** Download the latest release for your platform:
+
+| Platform | Download |
+|----------|----------|
+| **macOS** | [SubFrameSelector-macOS.zip](https://github.com/HiranD/Sub-Frame-Selector/releases/latest) |
+| **Windows** | [SubFrameSelector-Windows.zip](https://github.com/HiranD/Sub-Frame-Selector/releases/latest) |
+
+### Quick Start (macOS)
+1. Download `SubFrameSelector-macOS.zip` from [Releases](https://github.com/HiranD/Sub-Frame-Selector/releases/latest)
+2. Extract the zip file
+3. Right-click `SubFrame Selector.app` → Open (first time only, to bypass Gatekeeper)
+4. Load your FITS folder and start analyzing!
+
+### Quick Start (Windows)
+1. Download `SubFrameSelector-Windows.zip` from [Releases](https://github.com/HiranD/Sub-Frame-Selector/releases/latest)
+2. Extract the zip file
+3. Run `SubFrame Selector.exe`
+4. Load your FITS folder and start analyzing!
 
 ## Features
 
-- **Load FITS files** from a folder
-- **Analyze subframes** for quality metrics:
-  - FWHM (star sharpness)
+- **Load FITS files** from one or multiple folders
+- **Parallel analysis** using configurable CPU cores
+- **Quality metrics**:
+  - FWHM (star sharpness) - in pixels or arcseconds
   - Eccentricity (star roundness)
   - SNR (signal-to-noise ratio)
   - Star Count
-  - Background (brightness level)
+  - Background level
 - **Interactive plot** with sigma bands for outlier detection
-- **Click-to-select** bad frames on the plot
-- **Delete to Recycle Bin** (recoverable)
+- **Click-to-select** bad frames on the plot or file list
+- **Refresh** to rescan folders after deletion (uses cached data)
+- **Safe deletion** to Recycle Bin (recoverable)
+- **Tooltips** on all controls for easy learning
 
-## Screenshot
+## How to Use
 
-```
-+------------------------------------------------------------------+
-|  SubFrame Selector                                               |
-+------------------------------------------------------------------+
-|  [Open Folder]  [Analyze]  [Delete Selected]   Metric: [FWHM ▼]  |
-+--------------------+---------------------------------------------+
-|                    |                                             |
-|  File List         |    +2σ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─              |
-|  ☑ frame_001.fits |        ░░░░░░░░░░░░░░░░░░░░░░░              |
-|  ☑ frame_002.fits |   3.5  ▒▒▒●▒▒●▒▒▒●▒▒▒▒▒▒▒▒▒▒               |
-|  ☐ frame_003.fits |        ▒▒●▒▒▒▒▒▒▒▒●▒▒●▒▒▒▒▒▒               |
-|  ☐ frame_004.fits |   3.0  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒               |
-|  ☑ frame_005.fits |        ░░░░░░░░░░░░░░░░░░░░░░░              |
-|                    |    -2σ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─              |
-|  Selected: 2       |              Frame Index                    |
-+--------------------+---------------------------------------------+
-```
+1. **Open Folder** - Select a folder containing FITS files
+2. **+ Add Folder** - Optionally add more folders to analyze together
+3. **Analyze** - Calculate quality metrics for all frames (adjust CPU cores as needed)
+4. **Select Metric** - Choose which metric to display (FWHM, Eccentricity, etc.)
+5. **Identify Outliers** - Points outside the gray sigma bands are potential bad frames
+6. **Click to Select** - Click points on the plot or checkboxes in the file list
+7. **Delete Selected** - Move bad frames to Recycle Bin
+8. **Refresh** - Rescan folders and update plots with remaining files
 
-## Installation
+## Understanding the Plot
+
+### Sigma Bands
+The plot shows statistical boundaries using Median Absolute Deviation (MAD):
+- **Green line**: Median value
+- **Dark gray band**: ±1σ from median (~68% of frames)
+- **Light gray band**: ±2σ from median (~95% of frames)
+- **Outside bands**: Statistical outliers - candidates for rejection
+
+### Quality Metrics
+
+| Metric | Good Value | Bad Value | What It Indicates |
+|--------|------------|-----------|-------------------|
+| **FWHM** | Low | High | Focus quality / atmospheric seeing |
+| **Eccentricity** | < 0.5 | > 0.6 | Tracking/guiding errors (elongated stars) |
+| **SNR** | High | Low | Image noise level |
+| **Star Count** | Consistent | Drops | Clouds, fog, or obstructions |
+| **Background** | Low & stable | High/variable | Moonlight, twilight, light pollution |
+
+## FITS Header Support
+
+The app reads camera/telescope metadata from FITS headers to calculate FWHM in arcseconds:
+- **Pixel Size**: `XPIXSZ`, `PIXSIZE`
+- **Focal Length**: `FOCALLEN`, `FOCAL`
+
+Image scale formula: `(pixel_size_μm / focal_length_mm) × 206.265 arcsec/pixel`
+
+---
+
+## For Developers
+
+### Running from Source
 
 ```bash
-# Clone or download the project
-cd sub-frame-selector
+# Clone the repository
+git clone https://github.com/HiranD/Sub-Frame-Selector.git
+cd Sub-Frame-Selector
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Run the application
+python run.py
 ```
 
-## Requirements
-
+### Requirements
 - Python 3.10+
 - customtkinter
 - matplotlib
@@ -56,58 +105,35 @@ pip install -r requirements.txt
 - scipy
 - send2trash
 
-## Usage
+### Building Standalone App
 
 ```bash
-python run.py
+# Install PyInstaller
+pip install pyinstaller
+
+# Build (creates dist/SubFrame Selector.app on macOS)
+pyinstaller subframe-selector.spec --clean -y
 ```
 
-1. **Open Folder** - Select a folder containing FITS files
-2. **Analyze** - Calculate quality metrics for all frames
-3. **Select Metric** - Choose which metric to display (FWHM, Eccentricity, etc.)
-4. **Click Points** - Click on outlier points in the plot to mark for deletion
-5. **Delete Selected** - Move bad frames to Recycle Bin
-
-## How It Works
-
-### Sigma Bands
-The plot shows statistical boundaries:
-- **Dark gray band**: ±1σ from median (good frames)
-- **Light gray band**: ±1σ to ±2σ (marginal)
-- **Outside bands**: Outliers (bad frames)
-
-### Metrics Explained
-
-| Metric | Good | Bad | Indicates |
-|--------|------|-----|-----------|
-| FWHM | Low | High | Focus/seeing quality |
-| Eccentricity | Low (<0.5) | High (>0.6) | Tracking errors |
-| SNR | High | Low | Image noise |
-| Star Count | Consistent | Low | Clouds/obstructions |
-| Background | Low/stable | High | Moonlight/twilight |
-
-## Project Structure
+### Project Structure
 
 ```
 sub-frame-selector/
 ├── src/
-│   ├── analysis/       # FITS reading, star detection, metrics
-│   │   ├── fits_reader.py
-│   │   ├── star_detector.py
-│   │   ├── metrics.py
-│   │   ├── statistics.py
-│   │   └── analyzer.py
-│   └── gui/            # CustomTkinter UI
-│       ├── app.py
-│       ├── toolbar.py
-│       ├── file_panel.py
-│       └── plot_panel.py
-├── docs/
-│   ├── use-case.md
-│   └── implementation-plan.md
+│   ├── analysis/       # Core analysis engine
+│   │   ├── analyzer.py     # Parallel processing orchestrator
+│   │   ├── fits_reader.py  # FITS file I/O
+│   │   ├── star_detector.py # Star detection & PSF fitting
+│   │   ├── metrics.py      # Quality metrics calculation
+│   │   └── statistics.py   # MAD-based sigma bands
+│   └── gui/            # User interface
+│       ├── app.py          # Main application window
+│       ├── toolbar.py      # Buttons and controls
+│       ├── file_panel.py   # File list with checkboxes
+│       └── plot_panel.py   # Interactive matplotlib plot
+├── run.py              # Entry point
 ├── requirements.txt
-├── run.py
-└── README.md
+└── subframe-selector.spec  # PyInstaller config
 ```
 
 ## License
