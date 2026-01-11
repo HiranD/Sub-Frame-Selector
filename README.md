@@ -23,6 +23,10 @@ A desktop application for astrophotographers to analyze and reject bad subframes
 3. Run `SubFrame Selector.exe`
 4. Load your FITS folder and start analyzing!
 
+## Screenshot
+
+![SubFrame Selector](screenshots/screenshot-v1.3.0.png)
+
 ## Features
 
 - **Load FITS files** from one or multiple folders
