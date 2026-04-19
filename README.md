@@ -142,4 +142,4 @@ sub-frame-selector/
 
 ## License
 
-MIT
+[MIT](LICENSE)
