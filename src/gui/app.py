@@ -209,17 +209,15 @@ class SubframeSelectorApp(ctk.CTk):
                 self.file_panel.add_files(files)
                 self.loaded_folders.add(folder)
 
-                # Clear analysis (needs re-analysis with new files)
+                # Clear analysis (rebuilt from sidecars below)
                 self.analysis_results = []
                 self.analysis_statistics = {}
                 self.plot_panel.clear_plot()
                 self.toolbar.set_refresh_enabled(False)
 
-                # Update status
-                total_files = len(self.file_panel.files)
-                folder_count = len(self.loaded_folders)
-                self.status_label.configure(
-                    text=f"Loaded {total_files} files from {folder_count} folder(s)"
+                status = (
+                    f"Loaded {len(self.file_panel.files)} files "
+                    f"from {len(self.loaded_folders)} folder(s)"
                 )
             else:
                 # Replace all files
@@ -236,13 +234,99 @@ class SubframeSelectorApp(ctk.CTk):
                 # Clear plot
                 self.plot_panel.clear_plot()
 
-                # Update status
-                self.status_label.configure(text=f"Loaded {len(files)} files from: {folder}")
+                status = f"Loaded {len(files)} files from: {folder}"
 
-            self.stats_label.configure(text="Click 'Analyze' to calculate metrics")
+            # Frames analyzed in an earlier session still have their sidecars,
+            # so show those results straight away instead of making the user
+            # re-run work that is already done.
+            cached = self._load_cached_results()
+            if cached:
+                status += f" | {cached} restored from cache"
+            else:
+                self.stats_label.configure(text="Click 'Analyze' to calculate metrics")
+
+            self.status_label.configure(text=status)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load files: {str(e)}")
+
+    def _load_cached_results(self) -> int:
+        """
+        Populate metrics from any sidecars the loaded frames already have.
+
+        Returns:
+            Number of frames restored from cache
+        """
+        from analysis import sidecar, calculate_all_metric_stats, summarize_imaging_params
+
+        files = self.file_panel.files
+        if not files:
+            return 0
+
+        # Walk file_panel.files in order and look each path up. set_metrics()
+        # pairs row i with result i positionally, so these two lists must never
+        # be assembled independently of one another.
+        results = []
+        hits = 0
+        for file_info in files:
+            doc = sidecar.load_valid(file_info['path'], sidecar.DEFAULT_PARAMS)
+            if doc is not None:
+                results.append(sidecar.to_result(doc, file_info['path']))
+                hits += 1
+            else:
+                results.append({
+                    'filepath': file_info['path'],
+                    'filename': file_info['filename'],
+                    'metrics': None
+                })
+
+        if not hits:
+            return 0
+
+        self.analysis_results = results
+        self.analysis_statistics = calculate_all_metric_stats(
+            [r['metrics'] for r in results if r.get('metrics')]
+        )
+        self.imaging_params = summarize_imaging_params(results)
+
+        self.file_panel.set_metrics(results)
+        self._sync_arcsec_availability()
+        self.toolbar.set_refresh_enabled(True)
+        self._update_stats_label()
+        self._update_plot()
+
+        return hits
+
+    def _sync_arcsec_availability(self):
+        """
+        Tell the toolbar whether arcsec FWHM is available, and keep the
+        current metric in step.
+
+        set_arcsec_available() rewrites the dropdown's variable without firing
+        its callback, so without this the app can be left plotting
+        'fwhm_arcsec' for a dataset that has no image scale -- an all-NaN
+        series.
+        """
+        has_arcsec = 'fwhm_arcsec' in self.analysis_statistics
+        self.toolbar.set_arcsec_available(has_arcsec)
+
+        if not has_arcsec and self.current_metric == 'fwhm_arcsec':
+            self.current_metric = 'fwhm'
+
+        return has_arcsec
+
+    def _update_stats_label(self):
+        """Show median FWHM in the status bar, in arcsec when available."""
+        stats = self.analysis_statistics
+        if not stats:
+            return
+
+        if 'fwhm_arcsec' in stats:
+            s = stats['fwhm_arcsec']
+            self.stats_label.configure(text=f"FWHM: {s['median']:.2f}\" (σ={s['sigma']:.2f}\")")
+        elif 'fwhm' in stats:
+            s = stats['fwhm']
+            self.stats_label.configure(text=f"FWHM: {s['median']:.2f}px (σ={s['sigma']:.2f}px)")
 
     def on_analyze(self):
         """Start analysis of loaded files."""
@@ -263,17 +347,18 @@ class SubframeSelectorApp(ctk.CTk):
 
     def _run_analysis(self):
         """Run analysis in background thread."""
-        from analysis import SubframeAnalyzer
+        from analysis import SubframeAnalyzer, sidecar
 
         try:
             # Get CPU cores setting from toolbar
             num_cores = self.toolbar.get_num_cores()
 
+            # Defaults come from sidecar.DEFAULT_PARAMS so that these match the
+            # parameters _load_cached_results() looks sidecars up with. If the
+            # two ever drifted, every sidecar would silently be invalid.
             analyzer = SubframeAnalyzer(
-                fwhm_estimate=5.0,
-                threshold_sigma=5.0,
-                max_stars=500,
-                num_workers=num_cores
+                num_workers=num_cores,
+                **sidecar.DEFAULT_PARAMS
             )
 
             def progress_callback(current, total, filename):
@@ -283,14 +368,18 @@ class SubframeSelectorApp(ctk.CTk):
             # Analyze files from potentially multiple folders
             results = analyzer.analyze_files(
                 self.file_panel.files,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                force=self.toolbar.get_force_reanalyze()
             )
 
             # Update UI from main thread
             self.after(0, lambda: self._analysis_complete(results))
 
         except Exception as e:
-            self.after(0, lambda: self._analysis_error(str(e)))
+            # Bind the message now: Python clears `e` when the except block
+            # exits, so a lambda closing over it would raise NameError on the
+            # Tk main loop instead of reporting the failure.
+            self.after(0, lambda msg=str(e): self._analysis_error(msg))
 
     def _update_progress(self, current: int, total: int, filename: str):
         """Update progress during analysis."""
@@ -311,32 +400,33 @@ class SubframeSelectorApp(ctk.CTk):
         self.file_panel.set_metrics(self.analysis_results)
 
         # Check if arcsec data is available and update toolbar
-        has_arcsec = 'fwhm_arcsec' in self.analysis_statistics
-        self.toolbar.set_arcsec_available(has_arcsec)
+        self._sync_arcsec_availability()
 
         # Update status
         valid_count = sum(1 for r in self.analysis_results if r.get('metrics'))
         workers_used = results.get('workers_used', 1)
-        status_text = f"Analysis complete. {valid_count} files analyzed using {workers_used} core(s)."
+        cached_count = results.get('cached_count', 0)
+        computed = valid_count - cached_count
+
+        status_text = f"Analysis complete. {valid_count} files"
+        if cached_count:
+            status_text += f" ({computed} analyzed using {workers_used} core(s), {cached_count} cached)."
+        else:
+            status_text += f" analyzed using {workers_used} core(s)."
 
         # Add imaging params info if available
-        if self.imaging_params and self.imaging_params.get('image_scale'):
-            scale = self.imaging_params['image_scale']
-            status_text += f" | Scale: {scale:.2f}\"/px"
+        if self.imaging_params:
+            if self.imaging_params.get('image_scale'):
+                status_text += f" | Scale: {self.imaging_params['image_scale']:.2f}\"/px"
+            elif self.imaging_params.get('mixed'):
+                lo = self.imaging_params['image_scale_min']
+                hi = self.imaging_params['image_scale_max']
+                status_text += f" | Mixed scale: {lo:.2f}-{hi:.2f}\"/px"
 
         self.status_label.configure(text=status_text)
 
         # Show statistics
-        if self.analysis_statistics:
-            stats = self.analysis_statistics
-            if has_arcsec and 'fwhm_arcsec' in stats:
-                self.stats_label.configure(
-                    text=f"FWHM: {stats['fwhm_arcsec']['median']:.2f}\" (σ={stats['fwhm_arcsec']['sigma']:.2f}\")"
-                )
-            elif 'fwhm' in stats:
-                self.stats_label.configure(
-                    text=f"FWHM: {stats['fwhm']['median']:.2f}px (σ={stats['fwhm']['sigma']:.2f}px)"
-                )
+        self._update_stats_label()
 
         # Update plot panel
         self._update_plot()
@@ -345,6 +435,9 @@ class SubframeSelectorApp(ctk.CTk):
         """Handle analysis error."""
         self.is_analyzing = False
         self.toolbar.set_analyzing(False)
+        # set_analyzing(False) doesn't restore Refresh; without this a failed
+        # run would leave the button disabled until the next successful one.
+        self.toolbar.set_refresh_enabled(bool(self.analysis_results))
         self.status_label.configure(text="Analysis failed")
         messagebox.showerror("Analysis Error", f"Analysis failed: {error}")
 
@@ -367,6 +460,8 @@ class SubframeSelectorApp(ctk.CTk):
         """Perform file deletion."""
         from send2trash import send2trash
 
+        from analysis import sidecar
+
         deleted = []
         errors = []
 
@@ -375,6 +470,9 @@ class SubframeSelectorApp(ctk.CTk):
                 filepath = self.file_panel.files[idx]['path']
                 try:
                     send2trash(filepath)
+                    # Take the frame's cached analysis with it, so a stale
+                    # sidecar can't outlive the frame it describes.
+                    sidecar.trash(filepath)
                     deleted.append(idx)
                 except Exception as e:
                     errors.append(f"{filepath}: {str(e)}")
@@ -393,44 +491,59 @@ class SubframeSelectorApp(ctk.CTk):
             )
 
     def on_refresh(self):
-        """Refresh by rescanning folders and using cached analysis data."""
-        from analysis import FITSReader, calculate_all_metric_stats
+        """Refresh by rescanning folders and reloading cached analysis data."""
+        from analysis import (
+            FITSReader, calculate_all_metric_stats, sidecar, summarize_imaging_params
+        )
 
-        if not self.loaded_folders or not self.analysis_results:
+        if not self.loaded_folders:
             return
 
         # Rescan all loaded folders for existing files
         reader = FITSReader()
         current_files = []
         for folder in self.loaded_folders:
-            files = reader.load_folder(folder)
-            current_files.extend(files)
+            current_files.extend(reader.load_folder(folder))
 
-        # Get paths of files that still exist
-        current_paths = {f['path'] for f in current_files}
+        if not current_files:
+            return
 
-        # Filter analysis results to only files that still exist
-        self.analysis_results = [
-            r for r in self.analysis_results
-            if r['filepath'] in current_paths
-        ]
+        # Index this session's results by path. loaded_folders is a set, so
+        # current_files comes back in an arbitrary folder order -- results must
+        # be rebuilt by path lookup, never by zipping two lists that were
+        # ordered independently.
+        by_path = {r['filepath']: r for r in self.analysis_results if r}
 
-        # Build new file list matching analysis results order
-        result_paths = {r['filepath'] for r in self.analysis_results}
-        remaining_files = [f for f in current_files if f['path'] in result_paths]
+        results = []
+        for file_info in current_files:
+            existing = by_path.get(file_info['path'])
+            if existing is None:
+                # Not analyzed this session, but a previous one may have left
+                # a sidecar -- pick those up rather than showing a blank row.
+                doc = sidecar.load_valid(file_info['path'], sidecar.DEFAULT_PARAMS)
+                existing = sidecar.to_result(doc, file_info['path']) if doc else {
+                    'filepath': file_info['path'],
+                    'filename': file_info['filename'],
+                    'metrics': None
+                }
+            results.append(existing)
 
-        # Update file panel
-        self.file_panel.load_files(remaining_files)
-        self.file_panel.set_metrics(self.analysis_results)
+        self.analysis_results = results
+
+        # Update file panel (same order as results, by construction)
+        self.file_panel.load_files(current_files)
+        self.file_panel.set_metrics(results)
 
         # Recalculate statistics
-        valid_metrics = [r['metrics'] for r in self.analysis_results if r.get('metrics')]
+        valid_metrics = [r['metrics'] for r in results if r.get('metrics')]
         if valid_metrics:
             self.analysis_statistics = calculate_all_metric_stats(valid_metrics)
+            self.imaging_params = summarize_imaging_params(results)
 
         # Clear selection and update UI
         self.selected_for_deletion.clear()
         self.toolbar.set_delete_count(0)
+        self._sync_arcsec_availability()
         self._update_plot()
         self._update_status_bar()
 
@@ -439,21 +552,14 @@ class SubframeSelectorApp(ctk.CTk):
         if not self.analysis_statistics:
             return
 
-        has_arcsec = 'fwhm_arcsec' in self.analysis_statistics
-        stats = self.analysis_statistics
-
-        if has_arcsec and 'fwhm_arcsec' in stats:
-            self.stats_label.configure(
-                text=f"FWHM: {stats['fwhm_arcsec']['median']:.2f}\" (σ={stats['fwhm_arcsec']['sigma']:.2f}\")"
-            )
-        elif 'fwhm' in stats:
-            self.stats_label.configure(
-                text=f"FWHM: {stats['fwhm']['median']:.2f}px (σ={stats['fwhm']['sigma']:.2f}px)"
-            )
+        self._update_stats_label()
 
         # Update main status
         valid_count = len([r for r in self.analysis_results if r.get('metrics')])
-        self.status_label.configure(text=f"Refreshed. {valid_count} files remaining.")
+        total = len(self.file_panel.files)
+        self.status_label.configure(
+            text=f"Refreshed. {valid_count} of {total} files have metrics."
+        )
 
     def on_metric_changed(self, metric: str):
         """Handle metric selection change in dropdown."""

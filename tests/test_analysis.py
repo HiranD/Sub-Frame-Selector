@@ -13,8 +13,8 @@ Examples:
 import sys
 import os
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Add src to path for imports (this file lives in tests/, so src/ is one up)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from analysis import SubframeAnalyzer
 

@@ -73,6 +73,21 @@ class Toolbar(ctk.CTkFrame):
         )
         self.analyze_btn.pack(side="left", padx=5)
 
+        # Force re-analyze: ignore sidecars and recompute every frame. Needed
+        # after a transient failure, or to re-measure frames whose cached
+        # result you no longer trust.
+        self.force_var = ctk.BooleanVar(value=False)
+        self.force_check = ctk.CTkCheckBox(
+            self,
+            text="Force",
+            variable=self.force_var,
+            width=60,
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.force_check.pack(side="left", padx=(2, 5))
+        ToolTip(self.force_check, "Re-analyze every frame, ignoring cached results")
+
         # Progress indicator (hidden by default)
         self.progress_label = ctk.CTkLabel(
             self,
@@ -220,11 +235,13 @@ class Toolbar(ctk.CTkFrame):
             self.open_btn.configure(state="disabled")
             self.add_btn.configure(state="disabled")
             self.refresh_btn.configure(state="disabled")
+            self.force_check.configure(state="disabled")
             self.progress_label.pack(side="left", padx=10)
         else:
             self.analyze_btn.configure(state="normal")
             self.open_btn.configure(state="normal")
             self.add_btn.configure(state="normal")
+            self.force_check.configure(state="normal")
             self.progress_label.pack_forget()
 
     def set_refresh_enabled(self, enabled: bool):
@@ -248,6 +265,10 @@ class Toolbar(ctk.CTkFrame):
     def get_num_cores(self) -> int:
         """Get currently selected number of CPU cores."""
         return self._num_cores
+
+    def get_force_reanalyze(self) -> bool:
+        """Whether cached sidecar results should be ignored."""
+        return bool(self.force_var.get())
 
     def get_total_cores(self) -> int:
         """Get total number of CPU cores."""

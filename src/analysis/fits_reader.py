@@ -44,6 +44,60 @@ class FITSReader:
 
         raise ValueError(f"No image data found in FITS file: {filepath}")
 
+    def load_with_header(self, filepath: str) -> tuple[np.ndarray, fits.Header]:
+        """
+        Load image data and its own header in a single open.
+
+        Used by the analysis worker, which needs both the pixels and the
+        header (for image scale and the sidecar) and should not pay for two
+        opens of a 50 MB frame.
+
+        The header returned belongs to the same HDU the data came from, so it
+        always describes the pixels being analyzed.
+
+        Args:
+            filepath: Path to the FITS file
+
+        Returns:
+            Tuple of (2D float32 array, FITS header)
+
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            ValueError: If no image data found in FITS file
+        """
+        filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"FITS file not found: {filepath}")
+
+        with fits.open(filepath) as hdul:
+            for hdu in hdul:
+                if hdu.data is not None and len(hdu.data.shape) >= 2:
+                    if len(hdu.data.shape) == 3:
+                        data = hdu.data[0]
+                    else:
+                        data = hdu.data
+
+                    return data.astype(np.float32), hdu.header.copy()
+
+        raise ValueError(f"No image data found in FITS file: {filepath}")
+
+    def read_image_header(self, filepath: str) -> Optional[fits.Header]:
+        """
+        Read the header of the image-bearing HDU without loading pixel data.
+
+        Selects the HDU by its NAXIS card rather than by touching `.data`,
+        which would defeat astropy's lazy loading. This must pick the same HDU
+        as load_with_header so header fingerprints stay comparable.
+
+        Returns:
+            The header, or None if no image HDU is present
+        """
+        with fits.open(filepath) as hdul:
+            for hdu in hdul:
+                if hdu.header.get('NAXIS', 0) >= 2:
+                    return hdu.header.copy()
+        return None
+
     def load_folder(self, folder_path: str) -> list[dict]:
         """
         Scan folder for FITS files and return file info.
@@ -131,14 +185,30 @@ class FITSReader:
             filepath: Path to the FITS file
 
         Returns:
-            Dict with 'pixel_size_um', 'focal_length_mm', 'aperture_mm', 'image_scale'
-            Values are None if not found in header.
+            Dict with 'pixel_size_um', 'focal_length_mm', 'aperture_mm',
+            'binning', 'image_scale'. Values are None if not found in header.
             image_scale is in arcsec/pixel if calculable.
         """
-        header = self.get_header(filepath)
+        return self.imaging_params_from_header(self.get_header(filepath))
 
-        # Common header keywords for pixel size (in microns)
-        pixel_size_keys = ['XPIXSZ', 'PIXSIZE', 'PIXSIZE1', 'XPIXELSZ', 'PIXSCALE']
+    def imaging_params_from_header(self, header) -> dict:
+        """
+        Extract imaging parameters from an already-read header.
+
+        Split out from get_imaging_params so the analysis worker, which has
+        the header in hand already, doesn't reopen the file just to compute
+        the image scale.
+
+        Args:
+            header: FITS header (or plain dict of header cards)
+
+        Returns:
+            Same dict as get_imaging_params
+        """
+        # Common header keywords for pixel size (in microns).
+        # PIXSCALE is deliberately absent: by convention it holds arcsec/pixel,
+        # not microns, so treating it as a pixel size yields a wildly wrong scale.
+        pixel_size_keys = ['XPIXSZ', 'PIXSIZE', 'PIXSIZE1', 'XPIXELSZ']
         pixel_size = None
         for key in pixel_size_keys:
             if key in header and header[key]:
@@ -170,15 +240,31 @@ class FITSReader:
                 except (ValueError, TypeError):
                     continue
 
+        # Binning. Assumes XPIXSZ is the unbinned sensor pixel size, which is
+        # the ASCOM/ZWO convention; a few writers instead pre-multiply it, in
+        # which case binned frames would be double-counted here.
+        binning_keys = ['XBINNING', 'BINNING', 'XBIN']
+        binning = 1
+        for key in binning_keys:
+            if key in header and header[key]:
+                try:
+                    value = int(float(header[key]))
+                    if value >= 1:
+                        binning = value
+                        break
+                except (ValueError, TypeError):
+                    continue
+
         # Calculate image scale if we have pixel size and focal length
-        # Formula: scale (arcsec/pixel) = (pixel_size_um / focal_length_mm) * 206.265
+        # Formula: scale (arcsec/pixel) = (pixel_size_um * binning / focal_length_mm) * 206.265
         image_scale = None
         if pixel_size and focal_length and focal_length > 0:
-            image_scale = (pixel_size / focal_length) * 206.265
+            image_scale = (pixel_size * binning / focal_length) * 206.265
 
         return {
             'pixel_size_um': pixel_size,
             'focal_length_mm': focal_length,
             'aperture_mm': aperture,
+            'binning': binning,
             'image_scale': image_scale  # arcsec/pixel
         }

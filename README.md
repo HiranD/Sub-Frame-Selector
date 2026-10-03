@@ -39,6 +39,7 @@ A desktop application for astrophotographers to analyze and reject bad subframes
   - Background level
 - **Interactive plot** with sigma bands for outlier detection
 - **Click-to-select** bad frames on the plot or file list
+- **Cached results** so re-opening an analyzed folder is instant
 - **Refresh** to rescan folders after deletion (uses cached data)
 - **Safe deletion** to Recycle Bin (recoverable)
 - **Tooltips** on all controls for easy learning
@@ -53,6 +54,40 @@ A desktop application for astrophotographers to analyze and reject bad subframes
 6. **Click to Select** - Click points on the plot or checkboxes in the file list
 7. **Delete Selected** - Move bad frames to Recycle Bin
 8. **Refresh** - Rescan folders and update plots with remaining files
+
+## Cached Analysis
+
+Analysing a frame is expensive, so the result is saved next to it:
+
+```
+M31_L_120s_0001.fits          <- your frame
+M31_L_120s_0001.fits.sfs.json <- its cached analysis (~25 KB)
+```
+
+Re-opening a folder you've already analyzed shows its metrics immediately, with
+no need to press **Analyze** again. A frame is re-analyzed automatically if it
+changes, or if you change the detection settings. Tick **Force** next to
+Analyze to recompute everything regardless.
+
+Deleting a frame sends its sidecar to the Recycle Bin too, so nothing is left
+orphaned.
+
+Sidecars also hold the full per-star measurements (position, FWHM in x and y,
+amplitude), which the app itself only uses in aggregate. That makes them useful
+on their own — for tilt and field-curvature maps, seeing trends across a
+session, or feeding a frame ranking into other software:
+
+```python
+import json, pandas as pd
+from pathlib import Path
+
+frames = [json.load(open(p)) for p in Path("lights").rglob("*.sfs.json")]
+df = pd.json_normalize(frames)                 # one row per frame
+stars = pd.DataFrame(frames[0]["stars"])       # per-star table for one frame
+```
+
+If you don't want them, deleting the `.sfs.json` files is harmless — the app
+just re-analyzes next time.
 
 ## Understanding the Plot
 
@@ -78,8 +113,13 @@ The plot shows statistical boundaries using Median Absolute Deviation (MAD):
 The app reads camera/telescope metadata from FITS headers to calculate FWHM in arcseconds:
 - **Pixel Size**: `XPIXSZ`, `PIXSIZE`
 - **Focal Length**: `FOCALLEN`, `FOCAL`
+- **Binning**: `XBINNING`, `BINNING`
 
-Image scale formula: `(pixel_size_μm / focal_length_mm) × 206.265 arcsec/pixel`
+Image scale formula: `(pixel_size_μm × binning / focal_length_mm) × 206.265 arcsec/pixel`
+
+Scale is read per frame, so loading folders shot with different telescopes or
+cameras gives each frame its own correct arcsecond values. When a set spans
+more than one scale, the status bar reports the range instead of a single figure.
 
 ---
 
