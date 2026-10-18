@@ -68,7 +68,8 @@ def test_draw():
     ax3.set_ylim(0, 6)
     draw_bounds(ax3, 1.0, 3.3, '#f0a030')
     check("shading above sigma bands, below points",
-          all(band.get_zorder() < p.get_zorder() < 2 for p in ax3.patches))
+          len(ax3.patches) == 2
+          and all(band.get_zorder() < p.get_zorder() < 2 for p in ax3.patches))
 
 
 def main():

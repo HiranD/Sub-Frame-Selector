@@ -424,13 +424,79 @@ def test_add_folder_overrides(app, tmp2):
           f"added {app.manual_added}")
 
 
+def test_marks_use_committed_bounds(app):
+    """Text typed but not committed changes neither the marks nor the plot."""
+    feed(app)
+    set_row(app, 'fwhm', high='3.3')             # rejects f01
+    row = app.filter_panel.rows['fwhm']
+    row.high_entry.delete(0, 'end')
+    row.high_entry.insert(0, '2.45')             # would reject f01, f03, f04
+    app._on_manual_toggle(0, True)
+    check("uncommitted bound doesn't mark",
+          app.selected_for_deletion == {0, 1} and marks_agree(app),
+          f"marked {marked_names(app)}")
+    app.on_metric_changed('fwhm')                # redraws the plot
+    texts = [t.get_text() for t in app.plot_panel.ax.texts]
+    check("plot shows the committed bound", "< 3.3" in texts and "< 2.45" not in texts,
+          f"texts {texts}")
+    app.filter_panel.commit()
+    check("commit applies it",
+          app.selected_for_deletion == {0, 1, 3, 4} and marks_agree(app))
+
+
+def test_arcsec_disabled_at_launch(app):
+    row = app.filter_panel.rows['fwhm_arcsec']
+    check("arcsec row disabled before any folder loads",
+          not row.enabled and row.checkbox.cget('state') == 'disabled')
+    row.checkbox.toggle()
+    check("arcsec row can't be ticked at launch", not row.var.get())
+
+
+def test_delete_realigns_by_path(app):
+    """Delete rebuilds the kept results by path, whatever order they were in."""
+    fake_trash()
+    feed(app)
+    app.analysis_results = list(reversed(app.analysis_results))   # same length, wrong order
+    app._on_manual_toggle(1, True)
+    app._delete_files()
+    files = app.file_panel.files
+    check("results realigned by path after delete",
+          [r['filepath'] for r in app.analysis_results] == [f['path'] for f in files])
+    check("rows show their own metrics after delete",
+          all(w['metrics_label'].cget('text') == label_for(f['filename'])
+              for f, w in zip(files, app.file_panel.file_widgets)))
+
+
+def test_plot_click_out_of_range(app):
+    """A plot click past the last row leaves the plot showing the app's marks."""
+    feed(app)
+    app.plot_panel.selected_indices.add(6)       # the plot flips its own point first
+    app._on_manual_toggle(6, True)
+    check("out-of-range click resyncs the plot",
+          app.selected_for_deletion == set() and marks_agree(app),
+          f"plot {app.plot_panel.selected_indices}")
+
+
+def test_refresh_without_metrics(app):
+    """Refresh with no usable metrics drops the old statistics."""
+    feed(app)
+    app.analysis_results = [{'filepath': r['filepath'], 'filename': r['filename'],
+                             'metrics': None} for r in app.analysis_results]
+    app.imaging_params = {'image_scale': 1.0}    # left over from the earlier data
+    app.on_refresh()
+    check("stale stats dropped",
+          app.analysis_statistics == {} and app.imaging_params is None)
+    check("plot cleared", app.plot_panel.values is None)
+
+
 def with_app(tmp, test, *args):
     """Run one test against a fresh, hidden app with the scratch folder open."""
     print(f"\n{test.__name__}")
     app = SubframeSelectorApp()
     app.withdraw()
     try:
-        app._load_files(tmp)
+        if tmp:                                  # None: nothing loaded yet
+            app._load_files(tmp)
         test(app, *args)
     finally:
         app.destroy()
@@ -463,6 +529,11 @@ def main():
         with_app(tmp, test_delete_trashes_snapshot)
         with_app(tmp, test_refresh_keeps_marks)
         with_app(tmp, test_add_folder_overrides, tmp2)
+        with_app(tmp, test_marks_use_committed_bounds)
+        with_app(None, test_arcsec_disabled_at_launch)
+        with_app(tmp, test_delete_realigns_by_path)
+        with_app(tmp, test_plot_click_out_of_range)
+        with_app(tmp, test_refresh_without_metrics)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(tmp2, ignore_errors=True)

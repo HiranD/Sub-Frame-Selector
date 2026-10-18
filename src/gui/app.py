@@ -132,6 +132,8 @@ class SubframeSelectorApp(ctk.CTk):
             on_change=self._on_filters_changed
         )
         self.filter_panel.pack(fill="x")
+        # No data yet, so no arcsec scale: grey the row out until a load says
+        self.filter_panel.set_arcsec_available(False)
 
         self._update_section_weights()
 
@@ -591,18 +593,13 @@ class SubframeSelectorApp(ctk.CTk):
         if deleted:
             from analysis import calculate_all_metric_stats, summarize_imaging_params
 
-            # Drop the deleted frames from the results BEFORE the file panel
-            # drops them from its rows, and only when the two lines up row for
-            # row -- otherwise plot point i would map to a shifted file i.
-            if len(self.analysis_results) == len(self.file_panel.files):
-                gone = set(deleted)
-                self.analysis_results = [
-                    r for i, r in enumerate(self.analysis_results) if i not in gone
-                ]
-            else:
-                self.analysis_results = []
-
             self.file_panel.remove_files(deleted)
+
+            # Keep the results of the remaining rows, looked up by path, so
+            # plot point i still maps to row i whatever order the results
+            # were in. With no results yet there is nothing to keep.
+            if self.analysis_results:
+                self.analysis_results = self._results_in_file_order(self.analysis_results)
 
             self.analysis_statistics = calculate_all_metric_stats(
                 [r['metrics'] for r in self.analysis_results if r and r.get('metrics')]
@@ -660,11 +657,11 @@ class SubframeSelectorApp(ctk.CTk):
         # Update file panel (same order as results, by construction)
         self.file_panel.load_files(current_files)
 
-        # Recalculate statistics
+        # Recalculate statistics, even when empty: none of the old figures
+        # describe these frames any more
         valid_metrics = [r['metrics'] for r in results if r.get('metrics')]
-        if valid_metrics:
-            self.analysis_statistics = calculate_all_metric_stats(valid_metrics)
-            self.imaging_params = summarize_imaging_params(results)
+        self.analysis_statistics = calculate_all_metric_stats(valid_metrics)
+        self.imaging_params = summarize_imaging_params(results)
 
         # Marks are re-derived, so manual ones on frames still present survive
         self._refresh_views()
@@ -720,7 +717,7 @@ class SubframeSelectorApp(ctk.CTk):
 
         # Draw the active filter's bounds for the metric on screen, if any
         rule = next(
-            (r for r in self.filter_panel.get_rules() if r.metric == metric), None
+            (r for r in self.filter_panel.committed_rules if r.metric == metric), None
         )
         bounds = (rule.low, rule.high) if rule else None
 
@@ -768,11 +765,13 @@ class SubframeSelectorApp(ctk.CTk):
 
         # Filter marks are positional (result i -> row i), so only trust them
         # when the results line up with the file list row for row. Marking
-        # nothing is safe; marking the wrong file is not.
+        # nothing is safe; marking the wrong file is not. Committed rules
+        # only: a half-typed bound must not mark frames its field and the
+        # plot don't show yet.
         result_paths = [r.get('filepath') if r else None for r in self.analysis_results]
         if result_paths == paths:
             self.filter_failures = evaluate(
-                self.analysis_results, self.filter_panel.get_rules()
+                self.analysis_results, self.filter_panel.committed_rules
             )
         else:
             self.filter_failures = {}
@@ -791,6 +790,8 @@ class SubframeSelectorApp(ctk.CTk):
     def _on_manual_toggle(self, index: int, selected: bool):
         """Handle a mark or unmark from a plot click or a file-list checkbox."""
         if index >= len(self.file_panel.files):
+            # The plot flips a clicked point before calling back; undo that
+            self.plot_panel.update_selection(self.selected_for_deletion)
             return
 
         path = self.file_panel.files[index]['path']

@@ -105,17 +105,41 @@ class FilterPanel(ctk.CTkFrame):
                 rules.append(rule)
         return rules
 
+    @property
+    def committed_rules(self) -> List[Rule]:
+        """
+        Rules as of the last commit, in row order.
+
+        Mark frames from these, not get_rules(): get_rules() reads the live
+        field text, which can hold an edit the user hasn't committed yet.
+        """
+        return list(self._committed)
+
     def set_statistics(self, stats: dict) -> None:
         """Store per-metric statistics used to prefill bounds."""
         self._stats = stats or {}
 
     def set_arcsec_available(self, available: bool) -> None:
-        """Enable or disable the arcsec FWHM row."""
+        """
+        Enable or disable the arcsec FWHM row.
+
+        The committed rules follow, so a disabled row stops marking frames
+        and a re-enabled one marks again. Does not call on_change; the
+        caller recomputes the selection itself.
+        """
         row = self.rows['fwhm_arcsec']
+        changed = row.enabled != available
         row.enabled = available
         state = "normal" if available else "disabled"
         for widget in (row.checkbox, row.low_entry, row.high_entry):
             widget.configure(state=state)
+
+        if changed:
+            # Drop or restore just the arcsec rule, to match get_rules()
+            rules = [r for r in self._committed if r.metric != 'fwhm_arcsec']
+            rules += [r for r in self.get_rules() if r.metric == 'fwhm_arcsec']
+            order = list(self.rows)
+            self._committed = sorted(rules, key=lambda r: order.index(r.metric))
 
     def set_counts(self, rejected: int, total: int, kept: int) -> None:
         """Update the footer."""

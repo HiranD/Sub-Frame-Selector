@@ -98,6 +98,34 @@ def test_filter_panel(root):
           Rule('fwhm_arcsec', None, 2.0) in p.get_rules())
 
 
+def test_committed_rules(root):
+    calls = []
+    p = FilterPanel(root, on_change=lambda: calls.append(1))
+    p.set_statistics({'fwhm': {'median': 2.4, 'sigma': 0.45}})
+    p.rows['fwhm'].checkbox.toggle()
+    check("committed after tick", p.committed_rules == [Rule('fwhm', None, 3.3)])
+    set_text(p.rows['fwhm'].high_entry, "3.0")
+    check("typed text isn't committed yet",
+          p.committed_rules == [Rule('fwhm', None, 3.3)]
+          and p.get_rules() == [Rule('fwhm', None, 3.0)])
+    p.commit()
+    check("commit() applies it", p.committed_rules == [Rule('fwhm', None, 3.0)]
+          and len(calls) == 2)
+    p.rows['fwhm_arcsec'].var.set(True)
+    set_text(p.rows['fwhm_arcsec'].high_entry, "2.0")
+    p.commit()
+    n = len(calls)
+    p.set_arcsec_available(False)
+    check("disabling arcsec drops its committed rule, no emit",
+          p.committed_rules == [Rule('fwhm', None, 3.0)] and len(calls) == n)
+    p.set_arcsec_available(True)
+    check("re-enabling restores it in row order, no emit",
+          p.committed_rules == [Rule('fwhm', None, 3.0), Rule('fwhm_arcsec', None, 2.0)]
+          and len(calls) == n)
+    p.commit()
+    check("no emit on the next commit", len(calls) == n)
+
+
 def main():
     root = ctk.CTk()
     root.withdraw()
@@ -105,6 +133,7 @@ def main():
     try:
         test_collapsible(root)
         test_filter_panel(root)
+        test_committed_rules(root)
     finally:
         root.destroy()
 
