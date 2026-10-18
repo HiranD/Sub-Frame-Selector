@@ -82,18 +82,21 @@ class FilePanel(ctk.CTkFrame):
     def __init__(
         self,
         parent,
-        on_selection_change: Callable[[set[int]], None]
+        on_row_toggle: Callable[[int, bool], None],
+        on_clear: Callable[[], None]
     ):
         """
         Initialize file panel.
 
         Args:
             parent: Parent widget
-            on_selection_change: Callback when selection changes (receives set of selected indices)
+            on_row_toggle: Callback when the user ticks or unticks a row (index, is_selected)
+            on_clear: Callback when the Clear button is pressed
         """
         super().__init__(parent)
 
-        self.on_selection_change = on_selection_change
+        self.on_row_toggle = on_row_toggle
+        self.on_clear = on_clear
         self.files: list[dict] = []
         self.file_widgets: list[dict] = []
         self.selected_indices: set[int] = set()
@@ -146,17 +149,17 @@ class FilePanel(ctk.CTkFrame):
         )
         self.selection_label.pack(side="left")
 
-        # Select/Deselect all buttons
+        # Clear button: the app unmarks every file and unticks the filters
         self.deselect_btn = ctk.CTkButton(
             footer_frame,
             text="Clear",
             width=60,
             height=24,
             font=ctk.CTkFont(size=11),
-            command=self._deselect_all
+            command=self.on_clear
         )
         self.deselect_btn.pack(side="right", padx=2)
-        ToolTip(self.deselect_btn, "Clear all selections")
+        ToolTip(self.deselect_btn, "Clear all marks and untick all filters")
 
     def load_files(self, files: list[dict]):
         """
@@ -313,6 +316,7 @@ class FilePanel(ctk.CTkFrame):
             'filename_tooltip': filename_tooltip,
             'metrics_label': metrics_label,
             'metrics_tooltip': None,  # Will be set when metrics available
+            'metrics_base_text': None,  # Tooltip text before annotations
             'delete_marker': delete_marker
         })
 
@@ -334,25 +338,12 @@ class FilePanel(ctk.CTkFrame):
             widget['frame'].configure(fg_color="transparent")
 
         self._update_selection_label()
-        self.on_selection_change(self.selected_indices)
+        self.on_row_toggle(index, is_selected)
 
     def _update_selection_label(self):
         """Update selection count label."""
         count = len(self.selected_indices)
         self.selection_label.configure(text=f"Selected: {count}")
-
-    def _deselect_all(self):
-        """Deselect all files."""
-        for idx in list(self.selected_indices):
-            if idx < len(self.file_widgets):
-                widget = self.file_widgets[idx]
-                widget['var'].set(False)
-                widget['delete_marker'].grid_forget()
-                widget['frame'].configure(fg_color="transparent")
-
-        self.selected_indices.clear()
-        self._update_selection_label()
-        self.on_selection_change(self.selected_indices)
 
     def _clear_list(self):
         """Clear all file entries."""
@@ -403,6 +394,7 @@ class FilePanel(ctk.CTkFrame):
                     widget['metrics_tooltip'].update_text(tooltip_text)
                 else:
                     widget['metrics_tooltip'] = ToolTip(widget['metrics_label'], tooltip_text)
+                widget['metrics_base_text'] = tooltip_text
             else:
                 error = result.get('error', 'Error')
                 widget['metrics_label'].configure(text=error[:20], text_color="#dc3545")
@@ -412,6 +404,24 @@ class FilePanel(ctk.CTkFrame):
                     widget['metrics_tooltip'].update_text(error)
                 else:
                     widget['metrics_tooltip'] = ToolTip(widget['metrics_label'], error)
+                widget['metrics_base_text'] = error
+
+    def set_annotations(self, notes: dict[int, list[str]]):
+        """
+        Append per-row notes (such as rejection reasons) to the metrics tooltips.
+
+        Args:
+            notes: Lines to add, by row index. Rows not in it show only
+                the tooltip set_metrics() gave them.
+        """
+        for i, widget in enumerate(self.file_widgets):
+            text = widget['metrics_base_text']
+            if text is None:
+                continue  # No metrics or error tooltip yet
+
+            if i in notes:
+                text += "\n" + "\n".join(notes[i])
+            widget['metrics_tooltip'].update_text(text)
 
     def set_selected(self, indices: set[int]):
         """
@@ -473,7 +483,6 @@ class FilePanel(ctk.CTkFrame):
         # Update count
         self.count_label.configure(text=f"{len(self.files)} files")
         self._update_selection_label()
-        self.on_selection_change(self.selected_indices)
 
     def get_selected_files(self) -> list[str]:
         """Return list of selected file paths."""
