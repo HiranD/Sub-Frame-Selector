@@ -52,13 +52,13 @@ def draw_bounds(ax, low: Optional[float], high: Optional[float], color: str) -> 
 
     if high is not None:
         ax.axhline(y=high, color=color, linewidth=1.5, linestyle='--', zorder=3)
-        ax.axhspan(high, y_top, color=color, alpha=0.08, zorder=0)
+        ax.axhspan(high, y_top, color=color, alpha=0.08, zorder=1.5)
         ax.text(0.99, high, f'< {high:g}', transform=label_transform,
                 color=color, ha='right', va='bottom', fontsize=9)
 
     if low is not None:
         ax.axhline(y=low, color=color, linewidth=1.5, linestyle='--', zorder=3)
-        ax.axhspan(y_bottom, low, color=color, alpha=0.08, zorder=0)
+        ax.axhspan(y_bottom, low, color=color, alpha=0.08, zorder=1.5)
         ax.text(0.99, low, f'> {low:g}', transform=label_transform,
                 color=color, ha='right', va='top', fontsize=9)
 

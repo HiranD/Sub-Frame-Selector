@@ -61,6 +61,15 @@ def test_draw():
     draw_bounds(ax2, None, None, '#f0a030')
     check("nothing without bounds", not ax2.lines and not ax2.patches and not ax2.texts)
 
+    # Shading must sit above the sigma bands (collections, zorder 1) and
+    # below the scatter points (zorder 2)
+    ax3 = Figure().add_subplot(111)
+    band = ax3.fill_between([0, 1], [1, 1], [2, 2])
+    ax3.set_ylim(0, 6)
+    draw_bounds(ax3, 1.0, 3.3, '#f0a030')
+    check("shading above sigma bands, below points",
+          all(band.get_zorder() < p.get_zorder() < 2 for p in ax3.patches))
+
 
 def main():
     print("Plot bounds tests")
