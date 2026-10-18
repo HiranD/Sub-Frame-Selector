@@ -180,6 +180,46 @@ def test_left_column_layout(app):
           and weights() == (1, 0))
 
 
+def test_delete_keeps_alignment(app):
+    import send2trash
+    trashed = []
+    send2trash.send2trash = trashed.append       # nothing is really trashed
+    feed(app)
+    check("file panel owns its own metrics list",
+          app.file_panel.metrics_data is not app.analysis_results)
+    set_row(app, 'fwhm', low='1', high='3.3')
+    set_row(app, 'star_count', low='150')
+    app._on_manual_toggle(4, False)              # keep f04
+    doomed = [app.file_panel.files[i]['path'] for i in (1, 2)]
+    app._delete_files()
+    check("trashed the marked frames", sorted(trashed) == sorted(doomed))
+    check("results aligned", [r['filepath'] for r in app.analysis_results]
+          == [f['path'] for f in app.file_panel.files])
+    check("plot redrawn", len(app.plot_panel.values) == 4)
+    check("kept frame still kept", app.selected_for_deletion == set() and marks_agree(app))
+    check("footer after delete",
+          app.filter_panel.footer.cget('text') == "Rejected: 1 of 4 (1 kept)")
+    check("stats recomputed",
+          abs(app.analysis_statistics['fwhm']['median'] - 2.45) < 1e-9)
+    # A plot click on point 2 must land on the file in row 2 (f04)
+    app._on_manual_toggle(2, True)
+    check("click lands on the right file",
+          app.file_panel.files[2]['filename'] == 'f04.fits'
+          and app.selected_for_deletion == {2} and marks_agree(app))
+
+
+def test_delete_everything(app):
+    import send2trash
+    send2trash.send2trash = lambda path: None
+    feed(app)
+    for i in range(6):
+        app._on_manual_toggle(i, True)
+    app._delete_files()
+    check("all gone", app.file_panel.files == [] and app.analysis_results == [])
+    check("plot cleared", app.plot_panel.values is None)
+    check("footer empty", app.filter_panel.footer.cget('text') == "Rejected: 0 of 0")
+
+
 def with_app(tmp, test, *args):
     """Run one test against a fresh, hidden app with the scratch folder open."""
     print(f"\n{test.__name__}")
@@ -207,6 +247,8 @@ def main():
         with_app(tmp, test_open_forgets_old_stats, tmp)
         with_app(tmp, test_widget_wiring)
         with_app(tmp, test_left_column_layout)
+        with_app(tmp, test_delete_keeps_alignment)
+        with_app(tmp, test_delete_everything)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

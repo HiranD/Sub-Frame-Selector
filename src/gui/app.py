@@ -530,8 +530,26 @@ class SubframeSelectorApp(ctk.CTk):
 
         # Update UI
         if deleted:
+            from analysis import calculate_all_metric_stats, summarize_imaging_params
+
+            # Drop the deleted frames from the results BEFORE the file panel
+            # drops them from its rows, and only when the two lines up row for
+            # row -- otherwise plot point i would map to a shifted file i.
+            if len(self.analysis_results) == len(self.file_panel.files):
+                gone = set(deleted)
+                self.analysis_results = [
+                    r for i, r in enumerate(self.analysis_results) if i not in gone
+                ]
+            else:
+                self.analysis_results = []
+
             self.file_panel.remove_files(deleted)
-            self._recompute_selection()
+
+            self.analysis_statistics = calculate_all_metric_stats(
+                [r['metrics'] for r in self.analysis_results if r and r.get('metrics')]
+            )
+            self.imaging_params = summarize_imaging_params(self.analysis_results)
+            self._refresh_views()
             self.status_label.configure(text=f"Moved {len(deleted)} file(s) to Recycle Bin")
 
         if errors:

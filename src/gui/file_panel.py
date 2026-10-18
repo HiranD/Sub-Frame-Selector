@@ -361,7 +361,9 @@ class FilePanel(ctk.CTkFrame):
         Args:
             results: List of analysis results with 'metrics' dict
         """
-        self.metrics_data = results
+        # Own copy: remove_files() deletes from it, and must not trim the
+        # caller's list behind its back.
+        self.metrics_data = list(results)
 
         for i, result in enumerate(results):
             if i >= len(self.file_widgets):
