@@ -478,9 +478,13 @@ class FilePanel(ctk.CTkFrame):
 
         self.selected_indices = new_selected
 
-        # Renumber widgets
+        # Renumber widgets. Each checkbox reports the index it was created
+        # with, so rebind it too -- otherwise a click on a shifted row would
+        # report (and read the box of) whichever row now has its old index.
         for i, widget in enumerate(self.file_widgets):
             widget['frame'].grid(row=i, column=0, sticky="ew", pady=1)
+            widget['checkbox'].configure(
+                command=lambda idx=i: self._on_checkbox_toggle(idx))
 
         # Update count
         self.count_label.configure(text=f"{len(self.files)} files")

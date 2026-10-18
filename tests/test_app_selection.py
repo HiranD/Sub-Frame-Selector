@@ -58,6 +58,19 @@ def feed(app):
         'imaging_params': None})
 
 
+def marked_names(app):
+    """Filenames of the frames marked for deletion, sorted."""
+    return sorted(app.file_panel.files[i]['filename'] for i in app.selected_for_deletion)
+
+
+def fake_trash():
+    """Swap the recycle-bin call for a list, so nothing is really trashed."""
+    import send2trash
+    trashed = []
+    send2trash.send2trash = trashed.append
+    return trashed
+
+
 def set_row(app, key, low='', high='', on=True):
     """Tick a filter row, type its bounds and commit, as a user would."""
     row = app.filter_panel.rows[key]
@@ -221,6 +234,28 @@ def test_delete_everything(app):
     check("footer empty", app.filter_panel.footer.cget('text') == "Rejected: 0 of 0")
 
 
+def test_checkbox_after_delete(app):
+    """A row's checkbox acts on its own row after rows above it are deleted."""
+    fake_trash()
+    feed(app)
+    app._on_manual_toggle(0, True)
+    app._on_manual_toggle(1, True)
+    app._delete_files()                          # f02..f05 move up two rows
+    files = app.file_panel.files
+    widgets = app.file_panel.file_widgets
+    widgets[1]['checkbox'].toggle()              # the row showing f03
+    check("shifted checkbox marks its own row",
+          files[1]['filename'] == 'f03.fits' and app.selected_for_deletion == {1}
+          and app.manual_added == {files[1]['path']} and marks_agree(app),
+          f"marked {marked_names(app)}")
+    set_row(app, 'star_count', low='150')        # rejects f02 (row 0), f04 (row 2)
+    widgets[0]['checkbox'].toggle()              # keep f02
+    check("shifted checkbox keeps its own row",
+          app.manual_removed == {files[0]['path']}
+          and app.selected_for_deletion == {1, 2} and marks_agree(app),
+          f"marked {marked_names(app)}")
+
+
 def with_app(tmp, test, *args):
     """Run one test against a fresh, hidden app with the scratch folder open."""
     print(f"\n{test.__name__}")
@@ -250,6 +285,7 @@ def main():
         with_app(tmp, test_left_column_layout)
         with_app(tmp, test_delete_keeps_alignment)
         with_app(tmp, test_delete_everything)
+        with_app(tmp, test_checkbox_after_delete)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
