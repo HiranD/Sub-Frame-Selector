@@ -46,16 +46,27 @@ METRICS = [(2.4, 0.50, 400), (3.52, 0.50, 400), (0.0, 0.0, 0),
            (2.5, 0.85, 380), (2.6, 0.50, 120), (2.3, 0.50, 410)]   # fwhm, ecc, stars
 
 
-def feed(app):
-    """Complete a fake analysis run, one result per loaded file, in order."""
+def payload(app):
+    """A fake analysis run's output, one result per loaded file, in order."""
     results = []
     for f, (fw, e, st) in zip(app.file_panel.files, METRICS):
         m = {'fwhm': fw, 'fwhm_arcsec': None, 'eccentricity': e,
              'snr': 0.0 if st == 0 else 40.0, 'star_count': st, 'background': 800.0}
         results.append({'filepath': f['path'], 'filename': f['filename'], 'metrics': m})
-    app._analysis_complete({'results': results, 'workers_used': 1, 'cached_count': 0,
-        'statistics': calculate_all_metric_stats([r['metrics'] for r in results]),
-        'imaging_params': None})
+    return {'results': results, 'workers_used': 1, 'cached_count': 0,
+            'statistics': calculate_all_metric_stats([r['metrics'] for r in results]),
+            'imaging_params': None}
+
+
+def feed(app):
+    """Complete a fake analysis run, one result per loaded file, in order."""
+    app._analysis_complete(payload(app))
+
+
+def label_for(filename):
+    """The metrics label the row for scratch frame fNN.fits should show."""
+    fw, e, _ = METRICS[int(filename[1:3])]
+    return f"FWHM:{fw:.1f} E:{e:.2f}"
 
 
 def marked_names(app):
@@ -69,6 +80,35 @@ def fake_trash():
     trashed = []
     send2trash.send2trash = trashed.append
     return trashed
+
+
+def fake_dialogs(on_confirm=None):
+    """
+    Stand in for the app's message boxes, so no native dialog ever opens.
+
+    Args:
+        on_confirm: Called while the confirm dialog is "open", before it
+            answers yes.
+
+    Returns:
+        List of (kind, message) for every box the app tried to show.
+    """
+    import gui.app
+    shown = []
+
+    def box(kind):
+        return lambda title, message, **kw: shown.append((kind, message))
+
+    def askyesno(title, message, **kw):
+        shown.append(('askyesno', message))
+        if on_confirm:
+            on_confirm()
+        return True
+
+    for kind in ('showinfo', 'showwarning', 'showerror'):
+        setattr(gui.app.messagebox, kind, box(kind))
+    gui.app.messagebox.askyesno = askyesno
+    return shown
 
 
 def set_row(app, key, low='', high='', on=True):
@@ -256,6 +296,55 @@ def test_checkbox_after_delete(app):
           f"marked {marked_names(app)}")
 
 
+def test_analysis_after_delete(app):
+    """A run that finishes after a delete still pairs each row with its frame."""
+    fake_trash()
+    run = payload(app)                           # six results, as the run began
+    app._on_manual_toggle(1, True)
+    app._delete_files()                          # f01 goes while it runs
+    app._analysis_complete(run)
+    files = app.file_panel.files
+    check("results realigned to the file list",
+          [r['filepath'] for r in app.analysis_results] == [f['path'] for f in files])
+    check("one plot point per row", app.plot_panel.values is not None
+          and len(app.plot_panel.values) == 5)
+    check("each row shows its own frame's metrics",
+          all(w['metrics_label'].cget('text') == label_for(f['filename'])
+              for f, w in zip(files, app.file_panel.file_widgets)))
+    check("each plot point is its row's frame",
+          all(app.plot_panel.values[i] == METRICS[int(f['filename'][1:3])][0]
+              for i, f in enumerate(files)))
+    check("stats from the remaining frames",
+          abs(app.analysis_statistics['fwhm']['max'] - 2.6) < 1e-9)   # not 3.52 (f01)
+
+
+def test_no_delete_while_analyzing(app):
+    """Delete stays blocked for a whole Analyze run, and comes back after it."""
+    trashed = fake_trash()
+    shown = fake_dialogs()
+    run = payload(app)
+    app.is_analyzing = True
+    app.toolbar.set_analyzing(True)
+    app._on_manual_toggle(1, True)
+    check("Delete disabled while analyzing, even with marks",
+          app.selected_for_deletion == {1}
+          and app.toolbar.delete_btn.cget('state') == 'disabled')
+    app._delete_files()
+    app.on_delete_selected()
+    check("nothing trashed while analyzing",
+          trashed == [] and len(app.file_panel.files) == 6)
+    check("no confirm dialog while analyzing", shown == [], f"shown {shown}")
+    app._analysis_complete(run)
+    check("Delete enabled again after the run",
+          app.toolbar.delete_btn.cget('state') == 'normal')
+    app.is_analyzing = True
+    app.toolbar.set_analyzing(True)
+    app._analysis_error("boom")
+    check("Delete enabled again after a failed run",
+          app.toolbar.delete_btn.cget('state') == 'normal'
+          and shown and shown[-1][0] == 'showerror')
+
+
 def with_app(tmp, test, *args):
     """Run one test against a fresh, hidden app with the scratch folder open."""
     print(f"\n{test.__name__}")
@@ -286,6 +375,8 @@ def main():
         with_app(tmp, test_delete_keeps_alignment)
         with_app(tmp, test_delete_everything)
         with_app(tmp, test_checkbox_after_delete)
+        with_app(tmp, test_analysis_after_delete)
+        with_app(tmp, test_no_delete_while_analyzing)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

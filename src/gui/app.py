@@ -425,9 +425,10 @@ class SubframeSelectorApp(ctk.CTk):
                 # Update UI from main thread
                 self.after(0, lambda: self._update_progress(current, total, filename))
 
-            # Analyze files from potentially multiple folders
+            # Analyze files from potentially multiple folders. Pass a copy:
+            # remove_files() edits the panel's list in place.
             results = analyzer.analyze_files(
-                self.file_panel.files,
+                list(self.file_panel.files),
                 progress_callback=progress_callback,
                 force=self.toolbar.get_force_reanalyze()
             )
@@ -448,13 +449,21 @@ class SubframeSelectorApp(ctk.CTk):
 
     def _analysis_complete(self, results: dict):
         """Handle analysis completion."""
+        from analysis import calculate_all_metric_stats, summarize_imaging_params
+
         self.is_analyzing = False
         self.toolbar.set_analyzing(False)
         self.toolbar.set_refresh_enabled(True)
 
-        self.analysis_results = results['results']
-        self.analysis_statistics = results.get('statistics', {})
-        self.imaging_params = results.get('imaging_params')
+        # The run worked from a copy of the file list, so pair its results
+        # with the rows as they are now, and take statistics from that list
+        # rather than the run's -- a row it had that the list has since lost
+        # must not shift every later row onto the wrong frame.
+        self.analysis_results = self._results_in_file_order(results['results'])
+        self.analysis_statistics = calculate_all_metric_stats(
+            [r['metrics'] for r in self.analysis_results if r.get('metrics')]
+        )
+        self.imaging_params = summarize_imaging_params(self.analysis_results)
 
         # Update status
         valid_count = sum(1 for r in self.analysis_results if r.get('metrics'))
@@ -482,6 +491,25 @@ class SubframeSelectorApp(ctk.CTk):
         # File list, filters, selection, plot and statistics
         self._refresh_views()
 
+    def _results_in_file_order(self, results: list[Optional[dict]]) -> list[dict]:
+        """
+        Pair each row of the file list with its result, by path.
+
+        set_metrics() pairs row i with result i positionally, so results are
+        rebuilt by walking file_panel.files in order and looking each path
+        up, never trusted to line up already. A row with no result gets a
+        placeholder without metrics.
+        """
+        by_path = {r['filepath']: r for r in results if r}
+        return [
+            by_path.get(f['path']) or {
+                'filepath': f['path'],
+                'filename': f['filename'],
+                'metrics': None
+            }
+            for f in self.file_panel.files
+        ]
+
     def _analysis_error(self, error: str):
         """Handle analysis error."""
         self.is_analyzing = False
@@ -494,6 +522,9 @@ class SubframeSelectorApp(ctk.CTk):
 
     def on_delete_selected(self):
         """Delete selected files."""
+        if self.is_analyzing:
+            return  # Rows must not change under a running analysis
+
         if not self.selected_for_deletion:
             messagebox.showinfo("No Selection", "No files selected for deletion.")
             return
@@ -512,6 +543,9 @@ class SubframeSelectorApp(ctk.CTk):
         from send2trash import send2trash
 
         from analysis import sidecar
+
+        if self.is_analyzing:
+            return  # Rows must not change under a running analysis
 
         deleted = []
         errors = []
