@@ -345,6 +345,85 @@ def test_no_delete_while_analyzing(app):
           and shown and shown[-1][0] == 'showerror')
 
 
+def test_delete_commits_typed_bound(app):
+    """A bound typed but not yet committed is counted and trashed alike."""
+    trashed = fake_trash()
+    shown = fake_dialogs()
+    feed(app)
+    row = app.filter_panel.rows['star_count']
+    row.var.set(True)
+    row.low_entry.insert(0, '150')               # no Enter, no focus-out
+    doomed = [app.file_panel.files[i]['path'] for i in (2, 4)]
+    app.on_delete_selected()
+    asked = [message for kind, message in shown if kind == 'askyesno']
+    check("dialog count equals frames trashed",
+          len(asked) == 1 and f"Move {len(trashed)} file(s)" in asked[0],
+          f"shown {shown}, trashed {len(trashed)}")
+    check("trashed the frames the typed bound rejects", sorted(trashed) == sorted(doomed))
+
+
+def test_delete_trashes_snapshot(app):
+    """Delete trashes the frames it was given, even if the marks move on."""
+    trashed = fake_trash()
+    feed(app)
+    paths = [f['path'] for f in app.file_panel.files]
+    app._on_manual_toggle(1, True)
+    app._on_manual_toggle(3, True)
+    snapshot = [paths[1], paths[3]]
+    app._on_manual_toggle(3, False)              # selection changes after the snapshot
+    app._on_manual_toggle(5, True)
+    app._delete_files(snapshot)
+    check("trashes exactly the snapshot", sorted(trashed) == sorted(snapshot))
+    check("a later mark stays loaded and marked",
+          marked_names(app) == ['f05.fits'] and marks_agree(app))
+
+    # Through the dialog: a mark made while it is open is not trashed
+    shown = fake_dialogs(on_confirm=lambda: app._on_manual_toggle(0, True))
+    app.on_delete_selected()
+    check("dialog trashes only what it counted",
+          trashed[2:] == [paths[5]] and "Move 1 file(s)" in shown[-1][1],
+          f"trashed {trashed[2:]}")
+    check("mark made during the dialog survives",
+          marked_names(app) == ['f00.fits'] and marks_agree(app))
+
+
+def test_refresh_keeps_marks(app):
+    feed(app)
+    set_row(app, 'star_count', low='150')        # rejects f02, f04
+    app._on_manual_toggle(4, False)              # keep f04
+    app._on_manual_toggle(0, True)               # mark f00
+    app.on_refresh()
+    check("refresh keeps the manual mark and keep",
+          marked_names(app) == ['f00.fits', 'f02.fits'] and marks_agree(app),
+          f"marked {marked_names(app)}")
+    check("footer after refresh",
+          app.filter_panel.footer.cget('text') == "Rejected: 2 of 6 (1 kept)")
+
+
+def test_add_folder_overrides(app, tmp2):
+    feed(app)
+    set_row(app, 'star_count', low='150')        # rejects f02, f04
+    app._on_manual_toggle(4, False)              # keep f04
+    app._on_manual_toggle(0, True)               # mark f00
+    kept, added = app.file_panel.files[4]['path'], app.file_panel.files[0]['path']
+    app._load_files(tmp2, append=True)
+    check("add folder keeps overrides",
+          app.manual_added == {added} and app.manual_removed == {kept})
+    rows = {i for i, w in enumerate(app.file_panel.file_widgets) if w['var'].get()}
+    check("add folder: file list and Delete show the mark",
+          marked_names(app) == ['f00.fits'] and rows == app.selected_for_deletion
+          and app.toolbar.delete_btn.cget('text') == "Delete Selected (1)")
+
+    # Mark a frame from the new folder, then it disappears from disk
+    gone = os.path.join(tmp2, 'g01.fits')
+    app._on_manual_toggle([f['path'] for f in app.file_panel.files].index(gone), True)
+    os.remove(gone)
+    app.on_refresh()
+    check("overrides on a frame no longer loaded are pruned",
+          app.manual_added == {added} and app.manual_removed == {kept},
+          f"added {app.manual_added}")
+
+
 def with_app(tmp, test, *args):
     """Run one test against a fresh, hidden app with the scratch folder open."""
     print(f"\n{test.__name__}")
@@ -359,10 +438,13 @@ def with_app(tmp, test, *args):
 
 def main():
     tmp = tempfile.mkdtemp(prefix='sfs-selection-test-')
+    tmp2 = tempfile.mkdtemp(prefix='sfs-selection-test-')   # an added folder
     print(f"App selection tests (scratch: {tmp})")
     try:
         for i in range(len(METRICS)):
             open(os.path.join(tmp, f'f{i:02d}.fits'), 'w').close()
+        for i in range(2):
+            open(os.path.join(tmp2, f'g{i:02d}.fits'), 'w').close()
 
         with_app(tmp, test_filters_mark)
         with_app(tmp, test_manual_override)
@@ -377,8 +459,13 @@ def main():
         with_app(tmp, test_checkbox_after_delete)
         with_app(tmp, test_analysis_after_delete)
         with_app(tmp, test_no_delete_while_analyzing)
+        with_app(tmp, test_delete_commits_typed_bound)
+        with_app(tmp, test_delete_trashes_snapshot)
+        with_app(tmp, test_refresh_keeps_marks)
+        with_app(tmp, test_add_folder_overrides, tmp2)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp2, ignore_errors=True)
 
     print(f"\n{len(_PASSED)} passed, {len(_FAILED)} failed")
     if _FAILED:

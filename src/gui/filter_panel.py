@@ -130,6 +130,10 @@ class FilterPanel(ctk.CTkFrame):
             row.var.set(False)
         self._committed = []
 
+    def commit(self) -> None:
+        """Apply any bound typed but not yet committed, as Enter would."""
+        self._commit()
+
     def _commit(self) -> None:
         """Revalidate fields, recolour them, and emit if the rules changed."""
         for row in self.rows.values():

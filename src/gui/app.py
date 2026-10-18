@@ -525,21 +525,39 @@ class SubframeSelectorApp(ctk.CTk):
         if self.is_analyzing:
             return  # Rows must not change under a running analysis
 
-        if not self.selected_for_deletion:
+        # A bound still being typed would otherwise commit on focus-out
+        # while the dialog is up; apply it now so the count includes it.
+        self.filter_panel.commit()
+
+        # Trash exactly the frames the dialog counts, whatever changes
+        # while it is open.
+        paths = self._selected_paths()
+        if not paths:
             messagebox.showinfo("No Selection", "No files selected for deletion.")
             return
 
-        count = len(self.selected_for_deletion)
+        count = len(paths)
         confirm = messagebox.askyesno(
             "Confirm Deletion",
             f"Move {count} file(s) to Recycle Bin?\n\nThis action can be undone by restoring from Recycle Bin."
         )
 
         if confirm:
-            self._delete_files()
+            self._delete_files(paths)
 
-    def _delete_files(self):
-        """Perform file deletion."""
+    def _selected_paths(self) -> list[str]:
+        """Paths of the frames marked for deletion, in file-list order."""
+        files = self.file_panel.files
+        return [files[i]['path'] for i in sorted(self.selected_for_deletion)
+                if i < len(files)]
+
+    def _delete_files(self, paths: Optional[list[str]] = None):
+        """
+        Perform file deletion.
+
+        Args:
+            paths: Frames to trash. None means the current selection.
+        """
         from send2trash import send2trash
 
         from analysis import sidecar
@@ -547,10 +565,17 @@ class SubframeSelectorApp(ctk.CTk):
         if self.is_analyzing:
             return  # Rows must not change under a running analysis
 
+        if paths is None:
+            paths = self._selected_paths()
+
+        # Find each frame's row now; frames no longer loaded are skipped
+        doomed = set(paths)
+        indices = [i for i, f in enumerate(self.file_panel.files) if f['path'] in doomed]
+
         deleted = []
         errors = []
 
-        for idx in sorted(self.selected_for_deletion, reverse=True):
+        for idx in sorted(indices, reverse=True):
             if idx < len(self.file_panel.files):
                 filepath = self.file_panel.files[idx]['path']
                 try:
