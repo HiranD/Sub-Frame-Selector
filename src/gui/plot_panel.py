@@ -11,6 +11,58 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 
 
+def padded_ylim(
+    values: np.ndarray,
+    bounds: Optional[tuple[Optional[float], Optional[float]]]
+) -> tuple[float, float]:
+    """
+    Y-axis limits covering the data and any rejection bounds, with 10% padding.
+
+    Args:
+        values: Array of metric values (may contain NaN)
+        bounds: Optional (low, high) rejection bounds; either may be None
+
+    Returns:
+        (y_min, y_max) axis limits
+    """
+    finite = [float(v) for v in np.asarray(values, dtype=float) if np.isfinite(v)]
+    finite.extend(b for b in (bounds or ()) if b is not None)
+    if not finite:
+        return 0.0, 1.0
+
+    y_min, y_max = min(finite), max(finite)
+    y_padding = (y_max - y_min) * 0.1 if y_max > y_min else 1
+    return y_min - y_padding, y_max + y_padding
+
+
+def draw_bounds(ax, low: Optional[float], high: Optional[float], color: str) -> None:
+    """
+    Draw rejection thresholds as dashed lines with shaded reject zones.
+
+    Call after the y-limits are set, since the zones extend to the axis edge.
+
+    Args:
+        ax: Matplotlib axes to draw on
+        low: Frames below this are rejected (None for no lower bound)
+        high: Frames above this are rejected (None for no upper bound)
+        color: Colour for lines, zones, and labels
+    """
+    y_bottom, y_top = ax.get_ylim()
+    label_transform = ax.get_yaxis_transform()
+
+    if high is not None:
+        ax.axhline(y=high, color=color, linewidth=1.5, linestyle='--', zorder=3)
+        ax.axhspan(high, y_top, color=color, alpha=0.08, zorder=1.5)
+        ax.text(0.99, high, f'< {high:g}', transform=label_transform,
+                color=color, ha='right', va='bottom', fontsize=9)
+
+    if low is not None:
+        ax.axhline(y=low, color=color, linewidth=1.5, linestyle='--', zorder=3)
+        ax.axhspan(y_bottom, low, color=color, alpha=0.08, zorder=1.5)
+        ax.text(0.99, low, f'> {low:g}', transform=label_transform,
+                color=color, ha='right', va='top', fontsize=9)
+
+
 class PlotPanel(ctk.CTkFrame):
     """
     Matplotlib plot embedded in CustomTkinter with click-to-select.
@@ -31,6 +83,7 @@ class PlotPanel(ctk.CTkFrame):
         'band_2sigma': '#333333',       # Darker gray
         'median_line': '#2ecc71',       # Green
         'sigma_line': '#7f8c8d',        # Gray dashed
+        'threshold': '#f0a030',         # Amber (rejection bounds)
     }
 
     def __init__(
@@ -135,7 +188,8 @@ class PlotPanel(ctk.CTkFrame):
         metric_name: str,
         statistics: dict,
         filenames: list[str],
-        selected_indices: set[int]
+        selected_indices: set[int],
+        bounds: Optional[tuple[Optional[float], Optional[float]]] = None
     ):
         """
         Draw scatter plot with sigma bands.
@@ -146,6 +200,7 @@ class PlotPanel(ctk.CTkFrame):
             statistics: Stats dict with median, sigma, bands
             filenames: List of filenames for hover tooltips
             selected_indices: Set of indices currently selected
+            bounds: Optional (low, high) rejection bounds to draw as threshold lines
         """
         self.values = np.asarray(values)
         self.current_metric = metric_name
@@ -189,10 +244,12 @@ class PlotPanel(ctk.CTkFrame):
         self.ax.set_title(f'{metric_display.get(metric_name, metric_name)} by Frame', fontsize=12)
 
         # Set axis limits with padding
-        y_min, y_max = np.nanmin(self.values), np.nanmax(self.values)
-        y_padding = (y_max - y_min) * 0.1 if y_max > y_min else 1
         self.ax.set_xlim(-1, len(self.values))
-        self.ax.set_ylim(y_min - y_padding, y_max + y_padding)
+        self.ax.set_ylim(*padded_ylim(self.values, bounds))
+
+        # Rejection thresholds (after ylim, so zones reach the axis edge)
+        if bounds:
+            draw_bounds(self.ax, *bounds, self.COLORS['threshold'])
 
         # Update stats labels
         self._update_stats_labels(statistics)

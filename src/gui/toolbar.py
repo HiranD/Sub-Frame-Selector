@@ -35,6 +35,7 @@ class Toolbar(ctk.CTkFrame):
 
         self.callbacks = callbacks
         self._delete_count = 0
+        self._analyzing = False
         self._total_cores = cpu_count()
         self._num_cores = max(1, self._total_cores - 2)  # Default: max cores - 2
 
@@ -222,14 +223,23 @@ class Toolbar(ctk.CTkFrame):
         """Update delete button text with count."""
         self._delete_count = count
         self.delete_btn.configure(text=f"Delete Selected ({count})")
+        self._update_delete_state()
 
-        if count > 0:
-            self.delete_btn.configure(state="normal")
-        else:
-            self.delete_btn.configure(state="disabled")
+    def _update_delete_state(self):
+        """
+        Enable Delete only when something is marked and no analysis is running.
+
+        Deleting mid-analysis would drop rows the running analysis is still
+        producing results for, so its results would no longer line up.
+        """
+        enabled = self._delete_count > 0 and not self._analyzing
+        self.delete_btn.configure(state="normal" if enabled else "disabled")
 
     def set_analyzing(self, is_analyzing: bool):
         """Show/hide analyzing indicator."""
+        self._analyzing = is_analyzing
+        self._update_delete_state()
+
         if is_analyzing:
             self.analyze_btn.configure(state="disabled")
             self.open_btn.configure(state="disabled")

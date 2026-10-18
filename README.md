@@ -38,6 +38,7 @@ A desktop application for astrophotographers to analyze and reject bad subframes
   - Star Count
   - Background level
 - **Interactive plot** with sigma bands for outlier detection
+- **Rejection Filters** to mark every frame outside a Min/Max range per metric in one go
 - **Click-to-select** bad frames on the plot or file list
 - **Cached results** so re-opening an analyzed folder is instant
 - **Refresh** to rescan folders after deletion (uses cached data)
@@ -54,6 +55,20 @@ A desktop application for astrophotographers to analyze and reject bad subframes
 6. **Click to Select** - Click points on the plot or checkboxes in the file list
 7. **Delete Selected** - Move bad frames to Recycle Bin
 8. **Refresh** - Rescan folders and update plots with remaining files
+
+### Rejection Filters
+
+Instead of clicking frames one by one, tick a metric under **Rejection Filters**
+and give it a **Min**, a **Max**, or both. Every frame outside that range is
+marked for deletion straight away, and the marks update live as you change a
+bound (press Enter or leave the field). Ticking an empty row suggests a bound
+at 2σ from the median on the side that usually means a bad frame. The bounds
+for the metric on screen are drawn on the plot as dashed lines, and hovering a
+file's metrics shows why it was marked.
+
+Your own clicks still win: untick a marked frame to keep it, or tick any other
+frame to add it. Those choices survive threshold changes. Nothing is deleted
+until you press **Delete Selected** and confirm.
 
 ## Cached Analysis
 

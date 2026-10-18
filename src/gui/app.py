@@ -8,8 +8,12 @@ import json
 import os
 from pathlib import Path
 
+from analysis.filters import apply_manual_toggle, compute_selection, evaluate
+
 from .toolbar import Toolbar
+from .collapsible import CollapsibleSection
 from .file_panel import FilePanel
+from .filter_panel import FilterPanel
 from .plot_panel import PlotPanel
 
 
@@ -40,6 +44,12 @@ class SubframeSelectorApp(ctk.CTk):
         self.analysis_results: list[dict] = []
         self.analysis_statistics: dict = {}
         self.imaging_params: Optional[dict] = None
+        # Manual marks are keyed by path so they survive threshold changes,
+        # refresh and delete. selected_for_deletion is always derived from
+        # them plus the filters by _recompute_selection() -- never edit it.
+        self.manual_added: set[str] = set()
+        self.manual_removed: set[str] = set()
+        self.filter_failures: dict[int, list[str]] = {}
         self.selected_for_deletion: set[int] = set()
         self.is_analyzing = False
         self.current_metric: str = "fwhm"
@@ -54,17 +64,19 @@ class SubframeSelectorApp(ctk.CTk):
         +------------------------------------------+
         |              Toolbar                     |
         +-------------+----------------------------+
-        |             |                            |
+        | ▾ Files     |                            |
         |   File      |      Plot Panel            |
-        |   Panel     |      (placeholder)         |
-        |   (30%)     |      (70%)                 |
-        |             |                            |
+        |   Panel     |                            |
+        | ▾ Rejection |                            |
+        |   Filters   |                            |
         +-------------+----------------------------+
         |              Status Bar                  |
         +------------------------------------------+
         """
-        # Configure grid
-        self.grid_columnconfigure(0, weight=2)  # File panel - 20%
+        # Configure grid. The left column's minsize keeps the filter rows
+        # (labels plus two Min/Max entries) from clipping at the minimum
+        # window width.
+        self.grid_columnconfigure(0, weight=2, minsize=250)  # Left column - 20%
         self.grid_columnconfigure(1, weight=8)  # Plot panel - 80%
         self.grid_rowconfigure(0, weight=0)     # Toolbar - fixed
         self.grid_rowconfigure(1, weight=1)     # Main content - expand
@@ -84,17 +96,51 @@ class SubframeSelectorApp(ctk.CTk):
         )
         self.toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
 
-        # File Panel (left side)
-        self.file_panel = FilePanel(
-            self,
-            on_selection_change=self.on_file_selection_change
+        # Left column: Files above Rejection Filters, each collapsing on its own
+        self.left_column = ctk.CTkFrame(self, fg_color="transparent")
+        self.left_column.grid(row=1, column=0, sticky="nsew", padx=(5, 2), pady=5)
+        self.left_column.grid_columnconfigure(0, weight=1)
+
+        self.files_section = CollapsibleSection(
+            self.left_column, "Files",
+            on_toggle=lambda expanded: self._update_section_weights()
         )
-        self.file_panel.grid(row=1, column=0, sticky="nsew", padx=(5, 2), pady=5)
+        self.files_section.grid(row=0, column=0, sticky="nsew")
+
+        self.filters_section = CollapsibleSection(
+            self.left_column, "Rejection Filters",
+            on_toggle=lambda expanded: self._update_section_weights()
+        )
+        self.filters_section.grid(row=1, column=0, sticky="nsew", pady=(5, 0))
+
+        # A section's body sits in its row 1, under the header; let it take
+        # whatever height the left column gives that section.
+        for section in (self.files_section, self.filters_section):
+            section.grid_rowconfigure(1, weight=1)
+
+        # File Panel (in the Files section)
+        self.file_panel = FilePanel(
+            self.files_section.body,
+            on_row_toggle=self._on_manual_toggle,
+            on_clear=self._on_clear
+        )
+        self.file_panel.pack(fill="both", expand=True)
+
+        # Filter Panel (in the Rejection Filters section)
+        self.filter_panel = FilterPanel(
+            self.filters_section.body,
+            on_change=self._on_filters_changed
+        )
+        self.filter_panel.pack(fill="x")
+        # No data yet, so no arcsec scale: grey the row out until a load says
+        self.filter_panel.set_arcsec_available(False)
+
+        self._update_section_weights()
 
         # Plot Panel (right side)
         self.plot_panel = PlotPanel(
             self,
-            on_point_click=self.on_plot_point_click
+            on_point_click=self._on_manual_toggle
         )
         self.plot_panel.grid(row=1, column=1, sticky="nsew", padx=(2, 5), pady=5)
 
@@ -115,6 +161,19 @@ class SubframeSelectorApp(ctk.CTk):
             anchor="e"
         )
         self.stats_label.pack(side="right", padx=10)
+
+    def _update_section_weights(self):
+        """
+        Give the left column's spare height to whichever section can use it.
+
+        Files grows while expanded; Filters only takes the space once Files
+        is collapsed, so a collapsed section never holds empty height.
+        """
+        files_open = self.files_section.expanded
+        filters_open = self.filters_section.expanded
+        self.left_column.grid_rowconfigure(0, weight=1 if files_open else 0)
+        self.left_column.grid_rowconfigure(
+            1, weight=1 if filters_open and not files_open else 0)
 
     def _bind_events(self):
         """Bind keyboard shortcuts."""
@@ -224,11 +283,11 @@ class SubframeSelectorApp(ctk.CTk):
                 self.file_panel.load_files(files)
                 self.loaded_folders = {folder}
 
-                # Clear previous state
+                # Clear previous state, including the old folder's manual marks
                 self.analysis_results = []
                 self.analysis_statistics = {}
-                self.selected_for_deletion = set()
-                self.toolbar.set_delete_count(0)
+                self.manual_added.clear()
+                self.manual_removed.clear()
                 self.toolbar.set_refresh_enabled(False)
 
                 # Clear plot
@@ -243,6 +302,10 @@ class SubframeSelectorApp(ctk.CTk):
             if cached:
                 status += f" | {cached} restored from cache"
             else:
+                # analysis_results was emptied above; rebuild every view from
+                # that, which also re-derives the selection from the
+                # remaining manual marks.
+                self._refresh_views()
                 self.stats_label.configure(text="Click 'Analyze' to calculate metrics")
 
             self.status_label.configure(text=status)
@@ -289,26 +352,25 @@ class SubframeSelectorApp(ctk.CTk):
         )
         self.imaging_params = summarize_imaging_params(results)
 
-        self.file_panel.set_metrics(results)
-        self._sync_arcsec_availability()
         self.toolbar.set_refresh_enabled(True)
-        self._update_stats_label()
-        self._update_plot()
+        self._refresh_views()
 
         return hits
 
     def _sync_arcsec_availability(self):
         """
-        Tell the toolbar whether arcsec FWHM is available, and keep the
-        current metric in step.
+        Tell the toolbar and filter panel whether arcsec FWHM is available,
+        and keep the current metric in step.
 
         set_arcsec_available() rewrites the dropdown's variable without firing
         its callback, so without this the app can be left plotting
         'fwhm_arcsec' for a dataset that has no image scale -- an all-NaN
-        series.
+        series. The filter panel doesn't call back either; the caller must
+        recompute the selection afterwards (as _refresh_views() does).
         """
         has_arcsec = 'fwhm_arcsec' in self.analysis_statistics
         self.toolbar.set_arcsec_available(has_arcsec)
+        self.filter_panel.set_arcsec_available(has_arcsec)
 
         if not has_arcsec and self.current_metric == 'fwhm_arcsec':
             self.current_metric = 'fwhm'
@@ -365,9 +427,10 @@ class SubframeSelectorApp(ctk.CTk):
                 # Update UI from main thread
                 self.after(0, lambda: self._update_progress(current, total, filename))
 
-            # Analyze files from potentially multiple folders
+            # Analyze files from potentially multiple folders. Pass a copy:
+            # remove_files() edits the panel's list in place.
             results = analyzer.analyze_files(
-                self.file_panel.files,
+                list(self.file_panel.files),
                 progress_callback=progress_callback,
                 force=self.toolbar.get_force_reanalyze()
             )
@@ -388,19 +451,21 @@ class SubframeSelectorApp(ctk.CTk):
 
     def _analysis_complete(self, results: dict):
         """Handle analysis completion."""
+        from analysis import calculate_all_metric_stats, summarize_imaging_params
+
         self.is_analyzing = False
         self.toolbar.set_analyzing(False)
         self.toolbar.set_refresh_enabled(True)
 
-        self.analysis_results = results['results']
-        self.analysis_statistics = results.get('statistics', {})
-        self.imaging_params = results.get('imaging_params')
-
-        # Update file panel with metrics
-        self.file_panel.set_metrics(self.analysis_results)
-
-        # Check if arcsec data is available and update toolbar
-        self._sync_arcsec_availability()
+        # The run worked from a copy of the file list, so pair its results
+        # with the rows as they are now, and take statistics from that list
+        # rather than the run's -- a row it had that the list has since lost
+        # must not shift every later row onto the wrong frame.
+        self.analysis_results = self._results_in_file_order(results['results'])
+        self.analysis_statistics = calculate_all_metric_stats(
+            [r['metrics'] for r in self.analysis_results if r.get('metrics')]
+        )
+        self.imaging_params = summarize_imaging_params(self.analysis_results)
 
         # Update status
         valid_count = sum(1 for r in self.analysis_results if r.get('metrics'))
@@ -425,11 +490,27 @@ class SubframeSelectorApp(ctk.CTk):
 
         self.status_label.configure(text=status_text)
 
-        # Show statistics
-        self._update_stats_label()
+        # File list, filters, selection, plot and statistics
+        self._refresh_views()
 
-        # Update plot panel
-        self._update_plot()
+    def _results_in_file_order(self, results: list[Optional[dict]]) -> list[dict]:
+        """
+        Pair each row of the file list with its result, by path.
+
+        set_metrics() pairs row i with result i positionally, so results are
+        rebuilt by walking file_panel.files in order and looking each path
+        up, never trusted to line up already. A row with no result gets a
+        placeholder without metrics.
+        """
+        by_path = {r['filepath']: r for r in results if r}
+        return [
+            by_path.get(f['path']) or {
+                'filepath': f['path'],
+                'filename': f['filename'],
+                'metrics': None
+            }
+            for f in self.file_panel.files
+        ]
 
     def _analysis_error(self, error: str):
         """Handle analysis error."""
@@ -443,29 +524,60 @@ class SubframeSelectorApp(ctk.CTk):
 
     def on_delete_selected(self):
         """Delete selected files."""
-        if not self.selected_for_deletion:
+        if self.is_analyzing:
+            return  # Rows must not change under a running analysis
+
+        # A bound still being typed would otherwise commit on focus-out
+        # while the dialog is up; apply it now so the count includes it.
+        self.filter_panel.commit()
+
+        # Trash exactly the frames the dialog counts, whatever changes
+        # while it is open.
+        paths = self._selected_paths()
+        if not paths:
             messagebox.showinfo("No Selection", "No files selected for deletion.")
             return
 
-        count = len(self.selected_for_deletion)
+        count = len(paths)
         confirm = messagebox.askyesno(
             "Confirm Deletion",
             f"Move {count} file(s) to Recycle Bin?\n\nThis action can be undone by restoring from Recycle Bin."
         )
 
         if confirm:
-            self._delete_files()
+            self._delete_files(paths)
 
-    def _delete_files(self):
-        """Perform file deletion."""
+    def _selected_paths(self) -> list[str]:
+        """Paths of the frames marked for deletion, in file-list order."""
+        files = self.file_panel.files
+        return [files[i]['path'] for i in sorted(self.selected_for_deletion)
+                if i < len(files)]
+
+    def _delete_files(self, paths: Optional[list[str]] = None):
+        """
+        Perform file deletion.
+
+        Args:
+            paths: Frames to trash. None means the current selection.
+        """
         from send2trash import send2trash
 
         from analysis import sidecar
 
+        if self.is_analyzing:
+            return  # Rows must not change under a running analysis
+
+        if paths is None:
+            paths = self._selected_paths()
+
+        # Find each frame's row now; frames no longer loaded are skipped
+        doomed = set(paths)
+        indices = [i for i, f in enumerate(self.file_panel.files) if f['path'] in doomed]
+
         deleted = []
         errors = []
 
-        for idx in sorted(self.selected_for_deletion, reverse=True):
+        for idx in sorted(indices, reverse=True):
             if idx < len(self.file_panel.files):
                 filepath = self.file_panel.files[idx]['path']
                 try:
@@ -479,9 +591,21 @@ class SubframeSelectorApp(ctk.CTk):
 
         # Update UI
         if deleted:
+            from analysis import calculate_all_metric_stats, summarize_imaging_params
+
             self.file_panel.remove_files(deleted)
-            self.selected_for_deletion.clear()
-            self.toolbar.set_delete_count(0)
+
+            # Keep the results of the remaining rows, looked up by path, so
+            # plot point i still maps to row i whatever order the results
+            # were in. With no results yet there is nothing to keep.
+            if self.analysis_results:
+                self.analysis_results = self._results_in_file_order(self.analysis_results)
+
+            self.analysis_statistics = calculate_all_metric_stats(
+                [r['metrics'] for r in self.analysis_results if r and r.get('metrics')]
+            )
+            self.imaging_params = summarize_imaging_params(self.analysis_results)
+            self._refresh_views()
             self.status_label.configure(text=f"Moved {len(deleted)} file(s) to Recycle Bin")
 
         if errors:
@@ -532,19 +656,15 @@ class SubframeSelectorApp(ctk.CTk):
 
         # Update file panel (same order as results, by construction)
         self.file_panel.load_files(current_files)
-        self.file_panel.set_metrics(results)
 
-        # Recalculate statistics
+        # Recalculate statistics, even when empty: none of the old figures
+        # describe these frames any more
         valid_metrics = [r['metrics'] for r in results if r.get('metrics')]
-        if valid_metrics:
-            self.analysis_statistics = calculate_all_metric_stats(valid_metrics)
-            self.imaging_params = summarize_imaging_params(results)
+        self.analysis_statistics = calculate_all_metric_stats(valid_metrics)
+        self.imaging_params = summarize_imaging_params(results)
 
-        # Clear selection and update UI
-        self.selected_for_deletion.clear()
-        self.toolbar.set_delete_count(0)
-        self._sync_arcsec_availability()
-        self._update_plot()
+        # Marks are re-derived, so manual ones on frames still present survive
+        self._refresh_views()
         self._update_status_bar()
 
     def _update_status_bar(self):
@@ -595,43 +715,104 @@ class SubframeSelectorApp(ctk.CTk):
         # Get statistics for this metric
         stats = self.analysis_statistics.get(metric, {})
 
+        # Draw the active filter's bounds for the metric on screen, if any
+        rule = next(
+            (r for r in self.filter_panel.committed_rules if r.metric == metric), None
+        )
+        bounds = (rule.low, rule.high) if rule else None
+
         # Update plot
         self.plot_panel.plot_metric(
             values=values,
             metric_name=metric,
             statistics=stats,
             filenames=filenames,
-            selected_indices=self.selected_for_deletion
+            selected_indices=self.selected_for_deletion,
+            bounds=bounds
         )
 
-    def on_plot_point_click(self, index: int, is_selected: bool):
-        """Handle click on a point in the plot."""
-        if is_selected:
-            self.selected_for_deletion.add(index)
+    def _refresh_views(self):
+        """
+        Rebuild every view that depends on analysis_results.
+
+        Any code that replaces analysis_results must call this, so the file
+        list, filter panel, selection and plot all come from the same results.
+        """
+        self.file_panel.set_metrics(self.analysis_results)
+        self.filter_panel.set_statistics(self.analysis_statistics)
+        self._sync_arcsec_availability()
+        self._recompute_selection()
+
+        if self.analysis_results and self.analysis_statistics:
+            self._update_plot()
         else:
-            self.selected_for_deletion.discard(index)
+            self.plot_panel.clear_plot()
 
-        # Sync with file panel
-        self.file_panel.set_selected(self.selected_for_deletion)
-        self.toolbar.set_delete_count(len(self.selected_for_deletion))
+        self._update_stats_label()
 
-    def on_file_selection_change(self, selected_indices: set[int]):
-        """Handle file selection changes from file panel."""
-        self.selected_for_deletion = selected_indices
-        self.toolbar.set_delete_count(len(selected_indices))
+    def _recompute_selection(self):
+        """
+        Derive the deletion set from the filters and manual marks, and push
+        it to the file list, plot, Delete button and filter footer, so they
+        always agree.
+        """
+        paths = [f['path'] for f in self.file_panel.files]
 
-        # Sync with plot panel
-        self.plot_panel.update_selection(selected_indices)
+        # Manual marks are path-keyed; drop those for frames no longer loaded
+        loaded = set(paths)
+        self.manual_added &= loaded
+        self.manual_removed &= loaded
 
-    def mark_point_selected(self, index: int, selected: bool):
-        """Mark a point as selected (called from plot panel)."""
-        if selected:
-            self.selected_for_deletion.add(index)
+        # Filter marks are positional (result i -> row i), so only trust them
+        # when the results line up with the file list row for row. Marking
+        # nothing is safe; marking the wrong file is not. Committed rules
+        # only: a half-typed bound must not mark frames its field and the
+        # plot don't show yet.
+        result_paths = [r.get('filepath') if r else None for r in self.analysis_results]
+        if result_paths == paths:
+            self.filter_failures = evaluate(
+                self.analysis_results, self.filter_panel.committed_rules
+            )
         else:
-            self.selected_for_deletion.discard(index)
+            self.filter_failures = {}
 
-        self.file_panel.set_selected(self.selected_for_deletion)
-        self.toolbar.set_delete_count(len(self.selected_for_deletion))
+        selection = compute_selection(
+            paths, self.filter_failures, self.manual_added, self.manual_removed
+        )
+        self.selected_for_deletion = selection.selected
+
+        self.file_panel.set_selected(selection.selected)
+        self.file_panel.set_annotations(selection.notes)
+        self.plot_panel.update_selection(selection.selected)
+        self.toolbar.set_delete_count(len(selection.selected))
+        self.filter_panel.set_counts(selection.rejected, len(paths), selection.kept)
+
+    def _on_manual_toggle(self, index: int, selected: bool):
+        """Handle a mark or unmark from a plot click or a file-list checkbox."""
+        if index >= len(self.file_panel.files):
+            # The plot flips a clicked point before calling back; undo that
+            self.plot_panel.update_selection(self.selected_for_deletion)
+            return
+
+        path = self.file_panel.files[index]['path']
+        apply_manual_toggle(
+            path, selected, index in self.filter_failures,
+            self.manual_added, self.manual_removed
+        )
+        self._recompute_selection()
+
+    def _on_filters_changed(self):
+        """Re-mark frames after a filter row changes, and redraw its bounds."""
+        self._recompute_selection()
+        self._update_plot()
+
+    def _on_clear(self):
+        """Unmark everything: drop manual marks and untick every filter row."""
+        self.manual_added.clear()
+        self.manual_removed.clear()
+        self.filter_panel.untick_all()  # Keeps the typed bounds
+        self._recompute_selection()
+        self._update_plot()
 
 
 def run_app():
