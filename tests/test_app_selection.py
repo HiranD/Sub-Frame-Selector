@@ -200,7 +200,8 @@ def test_delete_keeps_alignment(app):
     check("footer after delete",
           app.filter_panel.footer.cget('text') == "Rejected: 1 of 4 (1 kept)")
     check("stats recomputed",
-          abs(app.analysis_statistics['fwhm']['median'] - 2.45) < 1e-9)
+          abs(app.analysis_statistics['fwhm']['median'] - 2.45) < 1e-9
+          and abs(app.analysis_statistics['fwhm']['max'] - 2.6) < 1e-9)   # was 3.52 (f01)
     # A plot click on point 2 must land on the file in row 2 (f04)
     app._on_manual_toggle(2, True)
     check("click lands on the right file",
